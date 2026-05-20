@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"os"
 
-	flag "github.com/spf13/pflag"
 	"slices"
 	"strings"
+
+	flag "github.com/spf13/pflag"
 )
 
 var (
@@ -19,6 +20,7 @@ func (cfg *Config) GetFlags() error {
 	var playlist string
 	var downloadMode string
 	var excludeLocal bool
+	var searchMBID string
 	var persist bool
 	var showVersion bool
 	// Long flags
@@ -28,6 +30,7 @@ func (cfg *Config) GetFlags() error {
 	flag.BoolVarP(&excludeLocal, "exclude-local", "e", false, "Exclude locally found tracks from the imported playlist")
 	flag.BoolVar(&persist, "persist", true, "Keep playlists between generations")
 	flag.BoolVarP(&showVersion, "version", "v", false, "Print version and exit")
+	flag.StringVar(&searchMBID, "search-mbid", "", "Test Plex search for a single recording MBID (resolves via ListenBrainz, then searches your library)")
 
 	flag.Parse()
 
@@ -37,18 +40,16 @@ func (cfg *Config) GetFlags() error {
 	}
 	persistSet := flag.Lookup("persist").Changed
 	cfgSet := flag.Lookup("config").Changed
-
-	// Validation for playlist
-	if !contains(validPlaylists, playlist) {
-		return fmt.Errorf("flag validation error: invalid playlist %s (must be one of: %s)",
-			playlist, strings.Join(validPlaylists, ", "))
-	}
-
-	// Validation for download mode
-	if !contains(validDownloadMode, downloadMode) {
-		return fmt.Errorf("flag validation error: invalid download mode %s (must be one of: %s)",
-			downloadMode, strings.Join(validDownloadMode, ", "))
-	}
+	if searchMBID == "" {
+			if !contains(validPlaylists, playlist) {
+				return fmt.Errorf("flag validation error: invalid playlist %s (must be one of: %s)",
+					playlist, strings.Join(validPlaylists, ", "))
+			}
+			if !contains(validDownloadMode, downloadMode) {
+				return fmt.Errorf("flag validation error: invalid download mode %s (must be one of: %s)",
+					downloadMode, strings.Join(validDownloadMode, ", "))
+			}
+		}
 
 	cfg.Flags.CfgPath = configPath
 	cfg.Flags.CfgSet = cfgSet
@@ -56,7 +57,7 @@ func (cfg *Config) GetFlags() error {
 	cfg.Flags.DownloadMode = downloadMode
 	cfg.Flags.ExcludeLocal = excludeLocal
 	cfg.Flags.Persist = persist
-
+	cfg.Flags.SearchMBID = searchMBID
 	// for deprecation purposes (can be removed at a later date)
 	cfg.Flags.PersistSet = persistSet
 

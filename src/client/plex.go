@@ -571,6 +571,8 @@ func getPlexSong(track *models.Track, metadata []SongMetadata) (string, error) {
 	}
 
 	slog.Debug(fmt.Sprintf("full search result: %v", metadata))
+	slog.Debug(fmt.Sprintf("full search total: %v", len(metadata)))
+
 	return "", fmt.Errorf("failed to find '%s' by '%s' in '%s'", track.Title, track.Artist, track.Album)
 }
 

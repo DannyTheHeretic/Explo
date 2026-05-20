@@ -135,6 +135,15 @@ func NewListenBrainz(cfg cfg.DiscoveryConfig, httpClient *util.HttpClient) *List
 		HttpClient: httpClient,
 	}
 }
+
+func (c *ListenBrainz) LookupRecording(mbid string) (*models.Track, error) {
+	tracks, err := c.getTracks([]string{mbid}, false)
+	if err != nil {
+		return nil, err
+	}
+	return tracks[0], nil
+}
+
 func (c *ListenBrainz) QueryTracks() ([]*models.Track, error) {
 	// Stats-based playlists bypass the discovery mode switch
 	if c.cfg.ImportPlaylist == "on-repeat" {

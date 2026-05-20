@@ -3,18 +3,23 @@ import { motion, AnimatePresence } from 'motion/react'
 import { Toggle } from './Toggle'
 import { Button } from './common'
 import { fetchPlaylistTracks } from '../../lib/listenbrainz'
+import { prefetchPlaylists } from '../../lib/api'
 
 // ── TrackRow ──────────────────────────────────────────────────────────────────
 
-function TrackRow({ track }) {
+function TrackRow({ track, index = 0 }) {
   const [imgFailed, setImgFailed] = useState(false)
+  const [imgLoaded, setImgLoaded] = useState(false)
 
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 12,
-      padding: '0 2px', minHeight: 52,
-      borderBottom: '1px solid rgba(255,255,255,0.04)',
-    }}>
+    <div
+      className="track-row"
+      style={{
+        '--delay': `${index * 30}ms`,
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '0 2px', minHeight: 52,
+        borderBottom: '1px solid rgba(255,255,255,0.04)',
+      }}>
       <span style={{
         width: 24, fontSize: 11, color: '#3a3a3a', textAlign: 'right',
         flexShrink: 0, fontVariantNumeric: 'tabular-nums',
@@ -23,18 +28,33 @@ function TrackRow({ track }) {
       </span>
 
       <div style={{
-        width: 42, height: 42, borderRadius: 3, flexShrink: 0,
+        position: 'relative', width: 42, height: 42, borderRadius: 3, flexShrink: 0,
         background: '#1e1e1e', overflow: 'hidden',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
         {track.coverUrl && !imgFailed ? (
-          <img
-            src={track.coverUrl}
-            alt=""
-            loading="lazy"
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-            onError={() => setImgFailed(true)}
-          />
+          <>
+            <img
+              src={track.coverUrl}
+              alt=""
+              loading="lazy"
+              style={{
+                width: '100%', height: '100%', objectFit: 'cover', display: 'block',
+                opacity: imgLoaded ? 1 : 0, transition: 'opacity 0.35s ease',
+              }}
+              onLoad={() => setImgLoaded(true)}
+              onError={() => setImgFailed(true)}
+            />
+            <motion.div
+              animate={{ backgroundPosition: ['200% 0', '-200% 0'], opacity: imgLoaded ? 0 : 1 }}
+              transition={{ backgroundPosition: { duration: 1.2, repeat: Infinity, ease: 'linear' }, opacity: { duration: 0.35 } }}
+              style={{
+                position: 'absolute', inset: 0,
+                background: 'linear-gradient(90deg, #1e1e1e 25%, #2e2e2e 50%, #1e1e1e 75%)',
+                backgroundSize: '200% 100%',
+              }}
+            />
+          </>
         ) : (
           <span style={{ fontSize: 14, color: '#2e2e2e' }}>♪</span>
         )}
@@ -88,24 +108,26 @@ function nextUpdateLabel(playlistType) {
   return `Next update ${nextMonday.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}`
 }
 
-export function TracklistDropdown({ playlist }) {
+export function TracklistDropdown({ playlist, lbUser, onRun, onDelete }) {
   const [tracks, setTracks] = useState([])
   const [generatedAt, setGeneratedAt] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [fetching, setFetching] = useState(false)
+  const [running, setRunning] = useState(false)
+  const [runStatus, setRunStatus] = useState('')
 
-  useEffect(() => {
-    if (!playlist) return
+  const loadTracks = (withRetry = false) => {
     let cancelled = false
     let retry = 0
     let retryTimer = null
     setLoading(true)
     setError(null)
     const load = () => {
-      fetchPlaylistTracks(playlist, { force: retry > 0 })
+      fetchPlaylistTracks(playlist, { force: retry > 0 || withRetry })
         .then(({ tracks: t, generatedAt: g }) => {
           if (cancelled) return
-          if (t.length === 0 && retry < 8) {
+          if (t.length === 0 && withRetry && retry < 8) {
             retry += 1
             retryTimer = setTimeout(load, 1500)
             return
@@ -117,18 +139,44 @@ export function TracklistDropdown({ playlist }) {
         .catch(e => { if (!cancelled) { setError(e.message); setLoading(false) } })
     }
     load()
-    return () => {
-      cancelled = true
-      if (retryTimer) clearTimeout(retryTimer)
-    }
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer) }
+  }
+
+  useEffect(() => {
+    if (!playlist) return
+    return loadTracks(false)
   }, [playlist])
+
+  const handleFetch = () => {
+    if (!lbUser) return
+    setFetching(true)
+    prefetchPlaylists(lbUser, [playlist])
+      .then(() => loadTracks(true))
+      .catch(e => setError(e.message))
+      .finally(() => setFetching(false))
+  }
+
+  const handleRun = async () => {
+    if (!onRun || running) return
+    setRunning(true)
+    setRunStatus('')
+    try {
+      await onRun()
+      setRunStatus('Started')
+      setTimeout(() => setRunStatus(''), 3000)
+    } catch (e) {
+      setRunStatus(e.message || 'Error')
+    } finally {
+      setRunning(false)
+    }
+  }
 
   const genDate = generatedAt ? new Date(generatedAt) : null
 
   return (
     <div style={{ marginTop: 16 }}>
       {/* Header */}
-      <div style={{ paddingBottom: 12, borderBottom: '1px solid #232323', display: 'flex', alignItems: 'baseline', gap: 10 }}>
+      <div style={{ paddingBottom: 12, borderBottom: '1px solid #232323', display: 'flex', alignItems: 'center', gap: 10 }}>
         <span style={{ fontSize: 11, color: '#ffffff', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
           {!loading && tracks.length ? `${tracks.length} Tracks` : 'Tracks'}
         </span>
@@ -137,21 +185,66 @@ export function TracklistDropdown({ playlist }) {
             Generated {genDate.toLocaleDateString([], { month: 'short', day: 'numeric' })}
           </span>
         )}
+        {(onRun || onDelete) && (
+          <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+            {runStatus && <span style={{ fontSize: 10, color: '#565656' }}>{runStatus}</span>}
+            {onRun && (
+              <button
+                onClick={handleRun}
+                disabled={running}
+                style={{
+                  background: 'none', border: 'none', padding: 0,
+                  fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase',
+                  color: running ? '#3a3a3a' : '#565656',
+                  cursor: running ? 'default' : 'pointer',
+                }}
+                onMouseEnter={e => { if (!running) e.currentTarget.style.color = 'white' }}
+                onMouseLeave={e => { if (!running) e.currentTarget.style.color = '#565656' }}
+              >
+                {running ? 'Starting…' : '▶ Run'}
+              </button>
+            )}
+            {onDelete && (
+              <button
+                onClick={onDelete}
+                title="Remove playlist"
+                style={{
+                  background: 'none', border: 'none', padding: 0,
+                  fontSize: 14, lineHeight: 1,
+                  color: '#3a3a3a', cursor: 'pointer',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.color = '#c0392b' }}
+                onMouseLeave={e => { e.currentTarget.style.color = '#3a3a3a' }}
+              >
+                ×
+              </button>
+            )}
+          </span>
+        )}
       </div>
 
       {/* Track list */}
       <div className="no-scrollbar" style={{ maxHeight: 560, overflowY: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
         {loading ? (
-          <div style={{ padding: '16px 2px', fontSize: 12, color: '#4a4a4a' }}>Loading…</div>
+          <div style={{ padding: '16px 2px', fontSize: 12, color: '#4a4a4a' }}>{fetching ? 'Fetching…' : 'Loading…'}</div>
         ) : error ? (
           <div style={{ padding: '16px 2px', fontSize: 12, color: '#c0392b' }}>{error}</div>
         ) : tracks.length === 0 ? (
-          <div style={{ padding: '16px 2px', fontSize: 12, color: '#4a4a4a' }}>
-            No playlist found yet. {nextUpdateLabel(playlist)}.
+          <div style={{ padding: '16px 2px', fontSize: 12, color: '#4a4a4a', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <span>No playlist found yet. {nextUpdateLabel(playlist)}.</span>
+            {lbUser && (
+              <button
+                onClick={handleFetch}
+                disabled={fetching}
+                className="bg-transparent border border-ui-border text-muted rounded-full px-3 py-1 text-[11px] cursor-pointer hover:text-white hover:border-[#444] transition-colors self-start disabled:opacity-50"
+              >
+                Pull tracks
+              </button>
+            )}
           </div>
         ) : (
-          tracks.map(t => (
-            <TrackRow key={`${t.rank}-${t.title}-${t.artist}`} track={t} />
+          tracks.map((t, i) => (
+            <TrackRow key={`${t.rank}-${t.title}-${t.artist}`} track={t} index={i} />
           ))
         )}
       </div>
@@ -196,6 +289,13 @@ const FALLBACK = {
   label: 'PLAYLIST',
 }
 
+// Color pool for user-imported custom playlists (cycled by colorIndex % 3)
+const CUSTOM_PRESETS = [
+  { background: cardGradient('#6366f1', '#8b5cf6', '#a78bfa'), accent: '#a78bfa', label: 'CUSTOM' },
+  { background: cardGradient('#0891b2', '#0e7490', '#67e8f9'), accent: '#67e8f9', label: 'CUSTOM' },
+  { background: cardGradient('#d97706', '#b45309', '#fcd34d'), accent: '#fcd34d', label: 'CUSTOM' },
+]
+
 const SCHEDULE_DAYS = [
   { value: -1,  label: 'Every day' },
   { value: 0,   label: 'Sunday' },
@@ -228,9 +328,21 @@ export function PlaylistCard({
   gradient: gradientOverride,
   tracklistOpen,
   onTracklistToggle,
+  onDelete,
+  trackId,
+  artworkUrl,
 }) {
   const { value, name } = playlist
-  const preset = PRESETS[value] ?? FALLBACK
+  // trackFetchId: use real playlist ID (custom playlists) if provided, else fall back to value
+  const trackFetchId = trackId ?? value
+  // Resolve preset: built-in types → PRESETS, custom-N → CUSTOM_PRESETS[N % 3], else FALLBACK
+  let preset
+  if (PRESETS[value]) {
+    preset = PRESETS[value]
+  } else {
+    const customMatch = value.match(/^custom-(\d+)$/)
+    preset = customMatch ? CUSTOM_PRESETS[Number(customMatch[1]) % CUSTOM_PRESETS.length] : FALLBACK
+  }
   const bg = gradientOverride ?? preset.background
   const { accent, label } = preset
 
@@ -253,7 +365,7 @@ export function PlaylistCard({
     let retry = 0
     let retryTimer = null
     const load = () => {
-      fetchPlaylistTracks(value, { force: retry > 0 })
+      fetchPlaylistTracks(trackFetchId, { force: retry > 0 })
         .then(({ tracks }) => {
           if (cancelled) return
           const covers = tracks.map(t => t.coverUrl).filter(Boolean)
@@ -271,7 +383,7 @@ export function PlaylistCard({
       cancelled = true
       if (retryTimer) clearTimeout(retryTimer)
     }
-  }, [value, s.enabled])
+  }, [trackFetchId, s.enabled])
 
   useEffect(() => {
     if (bgCovers.length < 2) return
@@ -311,28 +423,43 @@ export function PlaylistCard({
         {/* Gradient map color field */}
         <div style={{ position: 'absolute', inset: 0, backgroundImage: gradientLayers }} />
 
-        {/* Album art luminosity — gives the gradient field cover-art detail */}
-        <AnimatePresence>
-          {bgCovers[coverIdx] && (
-            <motion.img
-              key={coverIdx}
-              src={bgCovers[coverIdx]}
-              alt=""
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 0.86 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 1.5, ease: 'easeInOut' }}
-              onError={() => setBgCovers(prev => prev.filter((_, i) => i !== coverIdx))}
-              style={{
-                position: 'absolute', inset: 0,
-                width: '100%', height: '100%',
-                objectFit: 'cover', display: 'block',
-                filter: 'grayscale(1) contrast(1) brightness(0.5)',
-                mixBlendMode: 'luminosity',
-              }}
-            />
-          )}
-        </AnimatePresence>
+        {/* Playlist artwork — static cover image (e.g. Apple Music playlists) */}
+        {artworkUrl && (
+          <img
+            src={artworkUrl}
+            alt=""
+            style={{
+              position: 'absolute', inset: 0,
+              width: '100%', height: '100%',
+              objectFit: 'cover', display: 'block',
+            }}
+          />
+        )}
+
+        {/* Album art luminosity — gives the gradient field cover-art detail (skipped when static artwork present) */}
+        {!artworkUrl && (
+          <AnimatePresence>
+            {bgCovers[coverIdx] && (
+              <motion.img
+                key={coverIdx}
+                src={bgCovers[coverIdx]}
+                alt=""
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 0.86 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 1.5, ease: 'easeInOut' }}
+                onError={() => setBgCovers(prev => prev.filter((_, i) => i !== coverIdx))}
+                style={{
+                  position: 'absolute', inset: 0,
+                  width: '100%', height: '100%',
+                  objectFit: 'cover', display: 'block',
+                  filter: 'grayscale(1) contrast(1) brightness(0.5)',
+                  mixBlendMode: 'luminosity',
+                }}
+              />
+            )}
+          </AnimatePresence>
+        )}
 
         {/* Black wash — tune opacity to control gradient-map visibility */}
         <div style={{ position: 'absolute', inset: 0, background: '#000', opacity: 0.38 }} />
@@ -393,30 +520,33 @@ export function PlaylistCard({
           </span>
         </div>
 
-        {/* Toggle — bottom right */}
-        <label
-          onClick={e => e.stopPropagation()}
-          style={{
-            position: 'absolute', bottom: 8, right: 8,
-            display: 'flex', alignItems: 'center',
-            cursor: locked ? 'not-allowed' : 'pointer',
-            opacity: locked ? 0.5 : 1,
-          }}
-        >
-          <Toggle checked={s.enabled} onChange={onToggle} disabled={locked} tiny />
-        </label>
-
-        {locked && (
-          <span style={{
-            position: 'absolute', bottom: 10, right: 30,
-            fontSize: 7, letterSpacing: '0.12em', color: 'rgba(255,255,255,0.3)',
-          }}>ENV</span>
+        {/* Toggle — bottom right (hidden for custom playlists, which use onDelete in the tracklist) */}
+        {!onDelete && (
+          <>
+            <label
+              onClick={e => e.stopPropagation()}
+              style={{
+                position: 'absolute', bottom: 8, right: 8,
+                display: 'flex', alignItems: 'center',
+                cursor: locked ? 'not-allowed' : 'pointer',
+                opacity: locked ? 0.5 : 1,
+              }}
+            >
+              <Toggle checked={s.enabled} onChange={onToggle} disabled={locked} tiny />
+            </label>
+            {locked && (
+              <span style={{
+                position: 'absolute', bottom: 10, right: 30,
+                fontSize: 7, letterSpacing: '0.12em', color: 'rgba(255,255,255,0.3)',
+              }}>ENV</span>
+            )}
+          </>
         )}
       </div>
 
-      {/* Inline schedule editor */}
+      {/* Inline schedule editor — not shown for custom playlists (onDelete present) */}
       <AnimatePresence>
-        {s.editing && s.enabled && !locked && !fixedSchedule && (
+        {!onDelete && s.editing && s.enabled && !locked && !fixedSchedule && (
           <motion.div
             key="editor"
             initial={{ opacity: 0, height: 0 }}

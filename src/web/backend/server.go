@@ -115,7 +115,10 @@ func NewServer(cfg config.ServerConfig) *Server {
 func (s *Server) Start() error {
 	s.initServerLog()
 	s.startJobs()
-	s.PrefetchCovers()
+	coversDir := filepath.Join(s.cfg.WebDataDir, "cache", "covers")
+	if _, err := os.Stat(coversDir); os.IsNotExist(err) {
+		s.PrefetchCovers()
+	}
 	slog.Info("Explo web UI started", "addr", s.server.Addr)
 	return s.server.ListenAndServe()
 }
@@ -126,9 +129,12 @@ func (s *Server) startJobs() {
 	coversDir := filepath.Join(s.cfg.WebDataDir, "cache", "covers")
 	if err := s.cronJobs.RegisterCoverCleanup(
 		"0 3 * * *", coversDir, s.cfg.CacheSizeMB<<20); err != nil {
-			slog.Warn("failed to register cover cleanup job", "err", err.Error())
-		}
+		slog.Warn("failed to register cover cleanup job", "err", err.Error())
+	}
 
+	if err := s.cronJobs.RegisterCustomPlaylistRefresh(s.cfg.WebDataDir); err != nil {
+		slog.Warn("failed to register custom playlist refresh job", "err", err.Error())
+	}
 
 	s.cronJobs.Start()
 }
@@ -191,6 +197,10 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("GET /api/ui/logs", s.authStore.RequireAuth(http.HandlerFunc(s.handleGetLog)))
 	s.mux.Handle("GET /api/ui/playlists", s.authStore.RequireAuth(http.HandlerFunc(s.handleGetPlaylist)))
 	s.mux.Handle("POST /api/ui/playlists/prefetch", s.authStore.RequireAuth(http.HandlerFunc(s.handlePrefetchCovers)))
+	s.mux.Handle("GET /api/ui/custom-playlists", s.authStore.RequireAuth(http.HandlerFunc(s.handleGetCustomPlaylists)))
+	s.mux.Handle("POST /api/ui/custom-playlists", s.authStore.RequireAuth(http.HandlerFunc(s.handleImportCustomPlaylist)))
+	s.mux.Handle("DELETE /api/ui/custom-playlists/{id}", s.authStore.RequireAuth(http.HandlerFunc(s.handleDeleteCustomPlaylist)))
+	s.mux.Handle("POST /api/ui/custom-playlists/{id}/refresh", s.authStore.RequireAuth(http.HandlerFunc(s.handleRefreshCustomPlaylist)))
 	s.mux.Handle("POST /api/ui/logout", s.authStore.RequireAuth(http.HandlerFunc(s.handleLogout)))
 	s.mux.HandleFunc("GET /api/ui/csrf", s.csrfHandler)
 	s.mux.HandleFunc("POST /api/ui/login", s.handleLogin)
@@ -333,7 +343,9 @@ func parseEnvText(text string) map[string]string {
 }
 
 // handleGetConfig returns resolved config as JSON: { values, sources }.
-// Sources are "env" when set via os.Environ (takes precedence), "file" otherwise.
+// File keys are checked first because cleanenv sets them as OS env vars on startup,
+// so checking os.LookupEnv first would misclassify all file keys as "env".
+// Only keys present in the OS environment but absent from the file are marked "env".
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	data, err := os.ReadFile(s.cfg.WebEnvPath)
 	var fileValues map[string]string
@@ -346,12 +358,12 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	values := make(map[string]string, len(allConfigKeys))
 	sources := make(map[string]string, len(allConfigKeys))
 	for _, key := range allConfigKeys {
-		if v, ok := os.LookupEnv(key); ok && v != "" {
-			values[key] = v
-			sources[key] = "env"
-		} else if v, ok := fileValues[key]; ok {
+		if v, ok := fileValues[key]; ok && v != "" {
 			values[key] = v
 			sources[key] = "file"
+		} else if v, ok := os.LookupEnv(key); ok && v != "" {
+			values[key] = v
+			sources[key] = "env"
 		}
 	}
 

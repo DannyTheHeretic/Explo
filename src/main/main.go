@@ -1,12 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"explo/src/logging"
 	"explo/src/models"
 	"explo/src/web/backend"
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"explo/src/client"
 	"explo/src/config"
@@ -19,6 +23,82 @@ type Song struct {
 	Title  string
 	Artist string
 	Album  string
+}
+func runSearchTest(cfg *config.Config, httpClient *util.HttpClient) {
+	lb := discovery.NewListenBrainz(cfg.DiscoveryCfg, httpClient)
+	track, err := lb.LookupRecording(cfg.Flags.SearchMBID)
+	if err != nil {
+		log.Fatalf("failed to resolve MBID %s from ListenBrainz: %s", cfg.Flags.SearchMBID, err)
+	}
+	slog.Info("resolved recording", "title", track.CleanTitle, "artist", track.MainArtist, "album", track.Album, "duration_ms", track.Duration)
+
+	c, err := client.NewClient(cfg)
+	if err != nil {
+		log.Fatalf("failed to init client: %s", err)
+	}
+	tracks := []*models.Track{track}
+	if err := c.CheckTracks(tracks); err != nil {
+		slog.Warn("CheckTracks error", "err", err)
+	}
+
+	if track.Present {
+		slog.Info("FOUND in library", "system", cfg.System, "key", track.ID)
+	} else {
+		slog.Info("NOT FOUND in library", "system", cfg.System)
+	}
+}
+// loadCustomTracks reads a custom playlist's track cache and returns them as
+// models.Track slices, bypassing the LB discovery step entirely.
+func loadCustomTracks(dataDir, playlistID string) ([]*models.Track, string, error) {
+	type cachedTrack struct {
+		Title    string `json:"title"`
+		Artist   string `json:"artist"`
+		Release  string `json:"release"`
+		CoverURL string `json:"coverUrl"`
+	}
+	type cacheFile struct {
+		Tracks []cachedTrack `json:"tracks"`
+	}
+	type customPlaylist struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+
+	data, err := os.ReadFile(filepath.Join(dataDir, "cache", playlistID+".json"))
+	if err != nil {
+		return nil, "", fmt.Errorf("custom playlist %q not found in cache: %w", playlistID, err)
+	}
+	var c cacheFile
+	if err := json.Unmarshal(data, &c); err != nil {
+		return nil, "", fmt.Errorf("failed to parse custom playlist cache: %w", err)
+	}
+
+	// Look up the human-readable name from metadata
+	name := playlistID
+	if meta, err := os.ReadFile(filepath.Join(dataDir, "custom-playlists.json")); err == nil {
+		var all []customPlaylist
+		if json.Unmarshal(meta, &all) == nil {
+			for _, p := range all {
+				if p.ID == playlistID {
+					name = p.Name
+					break
+				}
+			}
+		}
+	}
+
+	tracks := make([]*models.Track, len(c.Tracks))
+	for i, t := range c.Tracks {
+		tracks[i] = &models.Track{
+			CleanTitle: t.Title,
+			Title:      t.Title,
+			Artist:     t.Artist,
+			MainArtist: t.Artist,
+			Album:      t.Release,
+			CoverURL:   t.CoverURL,
+		}
+	}
+	return tracks, name, nil
 }
 
 func initHttpClient() *util.HttpClient {
@@ -43,10 +123,17 @@ func main() {
 	cfg.ReadEnv()
 	cfg.MergeFlags()
 	setup(&cfg)
+
+	httpClient := initHttpClient()
+
+	if cfg.Flags.SearchMBID != "" {
+		runSearchTest(&cfg, httpClient)
+		return
+	}
 	slog.Info("Starting Explo...")
 
 	if cfg.ServerCfg.Enabled {
-		
+
 		exploPath, err := os.Executable()
 		if err != nil {
 			log.Fatal("could not determine executable path: ", err)
@@ -56,9 +143,19 @@ func main() {
 		srv := backend.NewServer(cfg.ServerCfg)
 		log.Fatal(srv.Start())
 	}
-	httpClient := initHttpClient()
-	discovery := discovery.NewDiscoverer(cfg.DiscoveryCfg, httpClient)
-	tracks, err := discovery.Discover()
+
+	var tracks []*models.Track
+	var err error
+	if strings.HasPrefix(cfg.Flags.Playlist, "custom-") {
+		var playlistName string
+		tracks, playlistName, err = loadCustomTracks(cfg.ServerCfg.WebDataDir, cfg.Flags.Playlist)
+		if err == nil {
+			cfg.ClientCfg.PlaylistName = playlistName
+		}
+	} else {
+		disc := discovery.NewDiscoverer(cfg.DiscoveryCfg, httpClient)
+		tracks, err = disc.Discover()
+	}
 	if err != nil {
 		slog.Error(err.Error(), "notify", true)
 		os.Exit(1)
