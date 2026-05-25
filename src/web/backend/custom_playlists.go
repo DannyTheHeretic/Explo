@@ -24,10 +24,10 @@ import (
 type CustomPlaylist struct {
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
-	Source          string    `json:"source"`                    // "listenbrainz" | "apple_music"
-	SourceURL       string    `json:"source_url,omitempty"`      // original URL for dedup + refresh
-	LBMBID          string    `json:"lb_mbid,omitempty"`         // ListenBrainz MBID (backward compat)
-	ArtworkURL      string    `json:"artwork_url,omitempty"`     // playlist cover image (Apple Music)
+	Source          string    `json:"source"`                     // "listenbrainz" | "apple_music" | "spotify"
+	SourceURL       string    `json:"source_url,omitempty"`       // original URL for dedup + refresh
+	LBMBID          string    `json:"lb_mbid,omitempty"`          // ListenBrainz MBID (backward compat)
+	ArtworkURL      string    `json:"artwork_url,omitempty"`      // playlist cover image (Apple Music)
 	ArtworkUploaded bool      `json:"artwork_uploaded,omitempty"` // true after artwork has been pushed to the music app
 	RefreshDays     int       `json:"refresh_days"`
 	ColorIndex      int       `json:"color_index"`
@@ -137,6 +137,9 @@ func fetchCustomPlaylistTracks(p CustomPlaylist) (FetchResult, error) {
 	case "apple_music":
 		name, art, tracks, err := fetchAppleMusicPlaylist(p.SourceURL)
 		return FetchResult{name, art, tracks}, err
+	case "spotify":
+		name, art, tracks, err := fetchSpotifyPlaylist(p.SourceURL)
+		return FetchResult{name, art, tracks}, err
 	default: // "listenbrainz" or legacy empty
 		mbid := p.LBMBID
 		if mbid == "" && p.SourceURL != "" {
@@ -167,6 +170,8 @@ func extractSourceID(source, url string) (string, error) {
 	switch source {
 	case "apple_music":
 		return extractAppleMusicID(url)
+	case "spotify":
+		return extractSpotifyID(url)
 	default:
 		return extractLBMBID(url)
 	}
@@ -306,7 +311,7 @@ func (s *Server) handleImportCustomPlaylist(w http.ResponseWriter, r *http.Reque
 	// Save metadata
 	// Derive LBMBID for backward compatibility (LB playlists only)
 	var lbMBID string
-	if body.Source != "apple_music" {
+	if body.Source != "apple_music" && body.Source != "spotify" {
 		lbMBID = sourceID
 	}
 
