@@ -121,10 +121,6 @@ func DownloadCover(url, coversDir string) string {
 		return ""
 	}
 	parts := strings.Split(strings.TrimRight(url, "/"), "/")
-<<<<<<< HEAD
-	mbid := parts[len(parts)-2]
-	destPath := filepath.Join(coversDir, mbid+".jpg")
-=======
 	// Spotify CDN: https://i.scdn.co/image/<hash>  → use last segment
 	// CAA:         https://coverartarchive.org/release/<mbid>/front-250 → use second-to-last
 	id := parts[len(parts)-2]
@@ -132,7 +128,6 @@ func DownloadCover(url, coversDir string) string {
 		id = parts[len(parts)-1]
 	}
 	destPath := filepath.Join(coversDir, id+".jpg")
->>>>>>> 30e97259cd4b34fe51a70672c9949c683c2c3369
 	if _, err := os.Stat(destPath); os.IsNotExist(err) {
 		resp, err := http.Get(url) //nolint:noctx
 		if err == nil {
