@@ -152,9 +152,5 @@ func DownloadCover(url, coversDir string) string {
 			}()
 		}
 	}
-<<<<<<< HEAD
-	return "/api/covers/" + mbid + ".jpg"
-=======
 	return "/api/covers/" + id + ".jpg"
->>>>>>> 30e97259cd4b34fe51a70672c9949c683c2c3369
 }
