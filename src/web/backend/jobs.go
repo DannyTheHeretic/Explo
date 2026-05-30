@@ -3,33 +3,32 @@ package backend
 // Jobs running on a schedule go here i.e cache cleanups (and playlist imports in the future)
 
 import (
-	"path/filepath"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
 )
 
-
 type Jobs struct {
 	scheduler gocron.Scheduler
 }
 
 type fileInfo struct {
-		path    string
-		size    int64
-		modTime time.Time
+	path    string
+	size    int64
+	modTime time.Time
 }
 
-func NewJobs() (*Jobs) {
+func NewJobs() *Jobs {
 	scheduler, err := gocron.NewScheduler()
 	if err != nil {
 		slog.Error("failed creating cron scheduler")
 	}
 
-	return &Jobs{ scheduler: scheduler}
+	return &Jobs{scheduler: scheduler}
 }
 
 func (j *Jobs) Start() {

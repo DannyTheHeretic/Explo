@@ -11,24 +11,23 @@ import (
 } */
 
 type AuthStore struct {
-	Username string
-	Hash string
+	Username       string
+	Hash           string
 	sessionManager *SessionManager
 }
 
-func NewAuthStore(user, password string, sessionManager *SessionManager) *AuthStore{
+func NewAuthStore(user, password string, sessionManager *SessionManager) *AuthStore {
 	hashPass, err := hashPassword(password)
 	if err != nil {
 		panic("failed to hash password")
 	}
 
 	return &AuthStore{
-		Username: user,
-		Hash: hashPass,
+		Username:       user,
+		Hash:           hashPass,
 		sessionManager: sessionManager,
 	}
 }
-
 
 func (a *AuthStore) CompareCreds(formUser, formPass string) bool {
 	if formUser != a.Username || bcrypt.CompareHashAndPassword([]byte(a.Hash), []byte(formPass)) != nil {
@@ -54,6 +53,5 @@ func (a *AuthStore) RequireAuth(next http.Handler) http.Handler {
 func hashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 10)
 	return string(bytes), err
-	
-}
 
+}

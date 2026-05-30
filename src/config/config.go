@@ -91,7 +91,7 @@ type SubsonicConfig struct {
 
 type DownloadConfig struct {
 	DownloadDir     string `env:"DOWNLOAD_DIR" env-default:"/data/"`
-	PathTemplate	string `env:"PATH_TEMPLATE"`
+	PathTemplate    string `env:"PATH_TEMPLATE"`
 	Youtube         Youtube
 	YoutubeMusic    YoutubeMusic
 	Slskd           Slskd
@@ -146,17 +146,17 @@ type SlskdMon struct {
 }
 
 type DiscoveryConfig struct {
-	Discovery    string `env:"DISCOVERY_SERVICE" env-default:"listenbrainz"`
+	Discovery       string   `env:"DISCOVERY_SERVICE" env-default:"listenbrainz"`
 	ArtistBlacklist []string `env:"ARTIST_BLACKLIST"`
-	Listenbrainz Listenbrainz
+	Listenbrainz    Listenbrainz
 }
 type Listenbrainz struct {
-	Discovery              string `env:"LISTENBRAINZ_DISCOVERY" env-default:"playlist"`
-	User                   string `env:"LISTENBRAINZ_USER"`
-	ImportPlaylist         string
-	SingleArtist           bool   `env:"SINGLE_ARTIST" env-default:"true"`
-	CoverArtSize           string `env:"COVER_ART_SIZE" env-default:"250"`
-	EnrichTrackMetadata	   bool   `env:"ENRICH_TRACK_METADATA" env-default:"false"`
+	Discovery           string `env:"LISTENBRAINZ_DISCOVERY" env-default:"playlist"`
+	User                string `env:"LISTENBRAINZ_USER"`
+	ImportPlaylist      string
+	SingleArtist        bool   `env:"SINGLE_ARTIST" env-default:"true"`
+	CoverArtSize        string `env:"COVER_ART_SIZE" env-default:"250"`
+	EnrichTrackMetadata bool   `env:"ENRICH_TRACK_METADATA" env-default:"false"`
 }
 
 type NotifyConfig struct {
