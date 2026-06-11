@@ -19,7 +19,11 @@ import (
 	"time"
 
 	"explo/src/config"
+	"explo/src/models"
 	"explo/src/web"
+
+	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 // Option is a value/label pair for select-type fields.
@@ -70,6 +74,7 @@ func newManualRunState() manualRunState {
 
 type Server struct {
 	cfg            config.ServerConfig
+	db             *gorm.DB
 	mux            *http.ServeMux
 	server         *http.Server
 	authStore      *AuthStore
@@ -77,8 +82,132 @@ type Server struct {
 	sessionManager *SessionManager
 	manualRun      manualRunState
 }
+func envBool(v string) bool {
+	return v == "true" || v == "1" || v == "yes"
+}
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+func (s *Server) bootstrapFromEnvIfNeeded() error {
+	var count int64
+	if err := s.db.Model(&models.User{}).Count(&count).Error; err != nil {
+		return err
+	}
 
-func NewServer(cfg config.ServerConfig) *Server {
+	if count > 0 {
+		return nil
+	}
+
+	slog.Info("no users found → bootstrapping from .env")
+
+	env, err := os.ReadFile(s.cfg.WebEnvPath)
+	if err != nil {
+		return fmt.Errorf("failed to read env file: %w", err)
+	}
+
+	cfg := parseEnvText(string(env))
+
+	username := firstNonEmpty(os.Getenv("UI_USERNAME"), "admin")
+	password := firstNonEmpty(os.Getenv("UI_PASSWORD"), "admin")
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+
+	user := models.User{
+		Username: username,
+		Password: string(hash),
+		Role:     models.RoleManager,
+	}
+
+	if err := s.db.Create(&user).Error; err != nil {
+		return err
+	}
+	user_creds := models.Credential{
+		APIKey:   cfg["API_KEY"],
+		Username: cfg["SYSTEM_USERNAME"],
+		Password: cfg["SYSTEM_PASSWORD"],
+	}
+
+
+	if err := s.db.Create(&user_creds).Error; err != nil {
+		return err
+	}
+
+	admin := models.Credential{
+		APIKey:   cfg["ADMIN_SYSTEM_API_KEY"],
+		Username:     cfg["ADMIN_SYSTEM_USERNAME"],
+		Password: cfg["ADMIN_SYSTEM_PASSWORD"],
+	}
+
+	_ = s.db.Create(&admin).Error
+
+
+	server := models.Server{
+		LibraryName: cfg["LIBRARY_NAME"],
+		URL:         cfg["SYSTEM_URL"],
+		System:      cfg["EXPLO_SYSTEM"],
+		ManagerID:      user.ID,
+		AdminCredentialID: admin.ID,
+	}
+
+	if err := s.db.Create(&server).Error; err != nil {
+		return err
+	}
+
+
+
+	user_server_creds := models.UserServerCredential{
+		UserID: user.ID,
+		ServerID: server.ID,
+		CredentialID: user_creds.ID,
+	}
+	if err := s.db.Create(&user_server_creds).Error; err != nil {
+		return err
+	}
+
+	downloaders := strings.Split(cfg["DOWNLOAD_SERVICES"], ",")
+
+	for i, d := range downloaders {
+		downloaders[i] = strings.TrimSpace(d)
+	}
+
+	dl := models.Downloader{
+		UserID: user.ID,
+
+		DownloadDir:     cfg["DOWNLOAD_DIR"],
+		PlaylistDir:     cfg["PLAYLIST_DIR"],
+		UseSubdirectory: envBool(cfg["USE_SUBDIRECTORY"]),
+		KeepPermissions: envBool(cfg["KEEP_PERMISSIONS"]),
+
+		Services: cfg["DOWNLOAD_SERVICES"],
+
+		YouTubeAPIKey:  cfg["YOUTUBE_API_KEY"],
+		TrackExtension: cfg["TRACK_EXTENSION"],
+
+		SlskdURL:         cfg["SLSKD_URL"],
+		SlskdAPIKey:      cfg["SLSKD_API_KEY"],
+		MigrateDownloads: envBool(cfg["MIGRATE_DOWNLOADS"]),
+		RenameTrack:      envBool(cfg["RENAME_TRACK"]),
+		SlskdDir:         cfg["SLSKD_DIR"],
+
+		Extensions:  cfg["EXTENSIONS"],
+		FilterList:  cfg["FILTER_LIST"],
+	}
+	if err := s.db.Create(&dl).Error; err != nil {
+		return err
+	}
+
+	slog.Info("bootstrap complete", "user", user.Username)
+	return nil
+}
+func NewServer(cfg config.ServerConfig, db *gorm.DB) *Server {
 	sessionManager := NewSessionManager(
 		NewInMemorySessionStore(),
 		1*time.Hour,
@@ -86,18 +215,16 @@ func NewServer(cfg config.ServerConfig) *Server {
 		"session",
 	)
 
-	authStore := NewAuthStore(
-		cfg.Username,
-		cfg.Password,
-		sessionManager,
-	)
+	authStore := NewAuthStore(db, sessionManager) // ✅ DB now
 
 	cronJobs := NewJobs()
 
 	mux := http.NewServeMux()
+
 	s := &Server{
-		cfg: cfg,
-		mux: mux,
+		cfg:            cfg,
+		db:             db, // ✅ store it
+		mux:            mux,
 		server: &http.Server{
 			Addr:    cfg.Port,
 			Handler: sessionManager.Handle(mux),
@@ -118,6 +245,9 @@ func (s *Server) Start() error {
 	coversDir := filepath.Join(s.cfg.WebDataDir, "cache", "covers")
 	if _, err := os.Stat(coversDir); os.IsNotExist(err) {
 		s.PrefetchCovers()
+	}
+	if err := s.bootstrapFromEnvIfNeeded(); err != nil {
+		return err
 	}
 	slog.Info("Explo web UI started", "addr", s.server.Addr)
 	go checkForUpdate()
@@ -348,8 +478,7 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		err := http.StatusMethodNotAllowed
-		http.Error(w, "Invalid request method", err)
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -361,17 +490,28 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	username := r.FormValue("username")
 	password := r.FormValue("password")
 
-	if !s.authStore.CompareCreds(username, password) {
+	var user models.User
+	err := s.db.Where("username = ?", username).First(&user).Error
+	if err != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
+
+	if bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) != nil {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
 	sess := s.sessionManager.GetSession(r)
 	sess.Put("authenticated", true)
-	sess.Put("username", username)
-	//s.sessionManager.Migrate(sess)
-	slog.Info("successful login", "user", username)
-}
+	sess.Put("user_id", user.ID)     // ✅ IMPORTANT
+	sess.Put("role", user.Role)      // optional but useful
+	sess.Put("username", user.Username)
 
+	slog.Info("successful login", "user", username)
+
+	w.WriteHeader(http.StatusOK)
+}
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	sess := s.sessionManager.GetSession(r)
 	sess.Delete("authenticated")

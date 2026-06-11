@@ -2,8 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"explo/src/client"
+	"explo/src/config"
+	"explo/src/discovery"
+	"explo/src/downloader"
 	"explo/src/logging"
 	"explo/src/models"
+	"explo/src/util"
 	"explo/src/web/backend"
 	"fmt"
 	"log"
@@ -12,11 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"explo/src/client"
-	"explo/src/config"
-	"explo/src/discovery"
-	"explo/src/downloader"
-	"explo/src/util"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 type Song struct {
@@ -122,7 +124,29 @@ func runSearchTest(cfg *config.Config, httpClient *util.HttpClient) {
 		slog.Info("NOT FOUND in library", "system", cfg.System)
 	}
 }
+
 func main() {
+	// Initialize the database
+	db, err := gorm.Open(sqlite.Open("app.db"), &gorm.Config{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	//Enable write ahead log and other sqlite pref optz.
+	db.Exec("PRAGMA journal_mode=WAL;")
+	db.Exec("PRAGMA synchronous=NORMAL;")
+	db.Exec("PRAGMA cache_size=10000;")
+	db.Exec("PRAGMA foreign_keys=ON;")
+	key := os.Getenv("SECRET_KEY")
+
+	if len(key) != 32 {
+		log.Fatal("SECRET_KEY must be exactly 64 bytes")
+	}
+	models.SetEncryptionKey([]byte(key))
+
+	if err := models.AutoMigrate(db); err != nil {
+		log.Fatal(err)
+	}
+
 	var cfg config.Config
 	if err := cfg.GetFlags(); err != nil {
 		log.Fatal(err)
@@ -152,7 +176,7 @@ func main() {
 		}
 
 		cfg.ServerCfg.ExploPath = exploPath
-		srv := backend.NewServer(cfg.ServerCfg)
+		srv := backend.NewServer(cfg.ServerCfg, db)
 		log.Fatal(srv.Start())
 	}
 
@@ -166,7 +190,6 @@ func main() {
 	}
 
 	var tracks []*models.Track
-	var err error
 	if strings.HasPrefix(cfg.Flags.Playlist, "custom-") {
 		var playlistName string
 		tracks, playlistName, err = loadCustomTracks(cfg.ServerCfg.WebDataDir, cfg.Flags.Playlist)

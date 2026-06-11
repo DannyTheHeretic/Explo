@@ -3,38 +3,33 @@ package backend
 import (
 	"net/http"
 
+	"explo/src/models"
+
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
-/* type Server struct {
-	mux *http.ServeMux
-} */
-
 type AuthStore struct {
-	Username string
-	Hash string
+	db             *gorm.DB
 	sessionManager *SessionManager
 }
 
-func NewAuthStore(user, password string, sessionManager *SessionManager) *AuthStore{
-	hashPass, err := hashPassword(password)
-	if err != nil {
-		panic("failed to hash password")
-	}
-
+func NewAuthStore(db *gorm.DB, sessionManager *SessionManager) *AuthStore {
 	return &AuthStore{
-		Username: user,
-		Hash: hashPass,
+		db:             db,
 		sessionManager: sessionManager,
 	}
 }
 
-
 func (a *AuthStore) CompareCreds(formUser, formPass string) bool {
-	if formUser != a.Username || bcrypt.CompareHashAndPassword([]byte(a.Hash), []byte(formPass)) != nil {
+	var user models.User
+
+	err := a.db.Where("username = ?", formUser).First(&user).Error
+	if err != nil {
 		return false
 	}
-	return true
+
+	return bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(formPass)) == nil
 }
 
 func (a *AuthStore) RequireAuth(next http.Handler) http.Handler {
@@ -47,13 +42,12 @@ func (a *AuthStore) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 
+		userID, ok := sess.Get("user_id").(uint)
+		if !ok || userID == 0 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
 		next.ServeHTTP(w, r)
 	})
 }
-
-func hashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 10)
-	return string(bytes), err
-	
-}
-

@@ -154,6 +154,7 @@ type DiscoveryConfig struct {
 	ArtistBlacklist []string `env:"ARTIST_BLACKLIST"`
 	Listenbrainz Listenbrainz
 }
+
 type Listenbrainz struct {
 	Discovery              string `env:"LISTENBRAINZ_DISCOVERY" env-default:"playlist"`
 	User                   string `env:"LISTENBRAINZ_USER"`
