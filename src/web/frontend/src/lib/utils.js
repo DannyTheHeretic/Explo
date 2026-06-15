@@ -2,9 +2,7 @@ function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-const SENSITIVE_KEY_RE = /password|token|api_key|secret|accesstoken/i
-
-export function highlightEnv(text, masked = false) {
+export function highlightEnv(text) {
   return text.split('\n').map(line => {
     const trimmed = line.trim()
     if (!trimmed) return ''
@@ -14,8 +12,7 @@ export function highlightEnv(text, masked = false) {
       const key = line.slice(0, eq)
       const val = line.slice(eq + 1).trim()
       if (!val) return `<span class="env-unset">${escHtml(line)}</span>`
-      const displayVal = (masked && SENSITIVE_KEY_RE.test(key)) ? '••••••••' : escHtml(line.slice(eq + 1))
-      return `<span class="env-key">${escHtml(key)}</span><span class="env-eq">=</span><span class="env-val">${displayVal}</span>`
+      return `<span class="env-key">${escHtml(key)}</span><span class="env-eq">=</span><span class="env-val">${escHtml(line.slice(eq + 1))}</span>`
     }
     return escHtml(line)
   }).join('\n')

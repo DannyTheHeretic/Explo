@@ -57,7 +57,6 @@ func (c DiscoverClient) filterArtists(tracks []*models.Track) []*models.Track {
 			slog.Debug("filtered out artist",
 				"name", track.MainArtist,
 				"mbid", track.MusicBrainzArtistID,
-				"track", track.CleanTitle,
 			)
 			continue
 		}

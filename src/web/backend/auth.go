@@ -51,3 +51,20 @@ func (a *AuthStore) RequireAuth(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+func (a *AuthStore) RequireManager(next http.Handler) http.Handler {
+	return a.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sess := a.sessionManager.GetSession(r)
+		role, _ := sess.Get("role").(models.UserRole)
+		if role == "" {
+			if roleString, ok := sess.Get("role").(string); ok {
+				role = models.UserRole(roleString)
+			}
+		}
+		if role != models.RoleManager {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}

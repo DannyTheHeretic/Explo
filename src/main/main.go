@@ -17,8 +17,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 type Song struct {
@@ -88,6 +89,17 @@ func loadCustomTracks(dataDir, playlistID string) ([]*models.Track, string, erro
 	return tracks, name, nil
 }
 
+func replacePlaylistDownloadSubdir(downloadDir, oldPlaylistName, newPlaylistName string) string {
+	if newPlaylistName == "" {
+		return downloadDir
+	}
+	cleaned := filepath.Clean(downloadDir)
+	if filepath.Base(cleaned) == oldPlaylistName {
+		return filepath.Join(filepath.Dir(cleaned), newPlaylistName)
+	}
+	return filepath.Join(downloadDir, newPlaylistName)
+}
+
 func initHttpClient() *util.HttpClient {
 	return util.NewHttp(util.HttpClientConfig{
 		Timeout: 10,
@@ -99,7 +111,7 @@ func setup(cfg *config.Config) {
 	cfg.HandleDeprecation()
 	notifyClient := logging.InitNotify(cfg.NotifyCfg)
 	logging.Init(cfg.LogLevel, notifyClient)
-	cfg.GenPlaylistDetails()
+	cfg.GenPlaylistName()
 }
 func runSearchTest(cfg *config.Config, httpClient *util.HttpClient) {
 	lb := discovery.NewListenBrainz(cfg.DiscoveryCfg, httpClient)
@@ -127,7 +139,21 @@ func runSearchTest(cfg *config.Config, httpClient *util.HttpClient) {
 
 func main() {
 	// Initialize the database
-	db, err := gorm.Open(sqlite.Open("app.db"), &gorm.Config{})
+	var cfg config.Config
+	if err := cfg.GetFlags(); err != nil {
+		log.Fatal(err)
+	}
+	cfg.ReadEnv()
+
+	db, err := gorm.Open(sqlite.Open("./config/app.db"), &gorm.Config{
+		Logger: logger.New(
+			log.New(os.Stdout, "\r\n", log.LstdFlags),
+			logger.Config{
+				LogLevel:                  logger.Warn,
+				IgnoreRecordNotFoundError: true,
+			},
+		),
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -139,19 +165,14 @@ func main() {
 	key := os.Getenv("SECRET_KEY")
 
 	if len(key) != 32 {
-		log.Fatal("SECRET_KEY must be exactly 64 bytes")
+		log.Fatal("SECRET_KEY must be exactly 32 bytes")
 	}
 	models.SetEncryptionKey([]byte(key))
 
 	if err := models.AutoMigrate(db); err != nil {
 		log.Fatal(err)
 	}
-
-	var cfg config.Config
-	if err := cfg.GetFlags(); err != nil {
-		log.Fatal(err)
-	}
-	cfg.ReadEnv()
+	cfg.ReadDatabase(db)
 	cfg.MergeFlags()
 	setup(&cfg)
 
@@ -192,16 +213,20 @@ func main() {
 	var tracks []*models.Track
 	if strings.HasPrefix(cfg.Flags.Playlist, "custom-") {
 		var playlistName string
+		previousPlaylistName := cfg.ClientCfg.PlaylistName
 		tracks, playlistName, err = loadCustomTracks(cfg.ServerCfg.WebDataDir, cfg.Flags.Playlist)
 		if err == nil {
-			cfg.ClientCfg.PlaylistName = playlistName
+			cfg.ClientCfg.PlaylistName = config.PlaylistNameWithUser(playlistName, cfg.DiscoveryCfg.Listenbrainz.User)
+			if cfg.DownloadCfg.UseSubDir {
+				cfg.DownloadCfg.DownloadDir = replacePlaylistDownloadSubdir(cfg.DownloadCfg.DownloadDir, previousPlaylistName, cfg.ClientCfg.PlaylistName)
+			}
 		}
 	} else {
 		disc := discovery.NewDiscoverer(cfg.DiscoveryCfg, httpClient)
 		tracks, err = disc.Discover()
 	}
 
-  if err != nil {
+	if err != nil {
 		slog.Error(err.Error(), "notify", true)
 		os.Exit(1)
 	}

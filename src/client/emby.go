@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
-	"net/url"
 
 	"explo/src/config"
 	"explo/src/models"
@@ -143,13 +143,14 @@ func (c *Emby) SearchSongs(tracks []*models.Track) error {
 			return err
 		}
 
+		normalizedTrackTitle := util.NormalizeTitle(track.Title)
 		normalizedCleanTitle := util.NormalizeTitle(track.CleanTitle)
 		for _, item := range results.Items {
 
 			normalizedItemTitle := util.NormalizeTitle(item.Name)
 
 			musicBrainzMatch := track.MusicBrainzTrackID != "" && item.ProviderIds.MusicBrainzTrack == track.MusicBrainzTrackID
-			titleMatch := normalizedItemTitle == normalizedCleanTitle
+			titleMatch := normalizedItemTitle == normalizedTrackTitle || normalizedItemTitle == normalizedCleanTitle
 			artistMatch := strings.EqualFold(item.AlbumArtist, track.MainArtist) || (len(item.Artists) > 0 && strings.EqualFold(item.Artists[0], track.MainArtist))
 			pathMatch := util.ContainsFold(item.Path,track.File)
 

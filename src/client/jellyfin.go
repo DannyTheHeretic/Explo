@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
-	"log/slog"
 
 	"explo/src/config"
 	"explo/src/models"
@@ -81,15 +81,11 @@ func (c *Jellyfin) AddHeader() error {
 		c.Cfg.Creds.Headers = make(map[string]string)
 	}
 
-	apiKey := c.resolveAPIKey()
-
-	if apiKey == "" {
-		return fmt.Errorf("API_KEY or ADMIN_API_KEY not set")
+	if c.Cfg.Creds.APIKey != "" {
+		c.Cfg.Creds.Headers["Authorization"] = fmt.Sprintf("MediaBrowser Token=%s, Client=%s", c.Cfg.Creds.APIKey, c.Cfg.ClientID)
+		return nil
 	}
-
-	c.Cfg.Creds.Headers["Authorization"] = fmt.Sprintf("MediaBrowser Token=%s, Client=%s", apiKey, c.Cfg.ClientID)
-
-	return nil
+	return fmt.Errorf("API_KEY not set")
 }
 
 func (c *Jellyfin) GetAuth() error {
@@ -161,16 +157,17 @@ func (c *Jellyfin) SearchSongs(tracks []*models.Track) error {
 		if err = util.ParseResp(body, &results); err != nil {
 			return err
 		}
+		normalizedTrackTitle := util.NormalizeTitle(track.Title)
 		normalizedCleanTitle := util.NormalizeTitle(track.CleanTitle)
 		for _, item := range results.Items {
 
 			normalizedItemTitle := util.NormalizeTitle(item.Name)
 
 			musicBrainzMatch := track.MusicBrainzTrackID != "" && item.ProviderIds.MusicBrainzTrack == track.MusicBrainzTrackID
-			titleMatch := normalizedItemTitle == normalizedCleanTitle
+			titleMatch := normalizedItemTitle == normalizedTrackTitle || normalizedItemTitle == normalizedCleanTitle
 			artistMatch := strings.EqualFold(item.AlbumArtist, track.MainArtist) || (len(item.Artists) > 0 && strings.EqualFold(item.Artists[0], track.MainArtist))
 			pathMatch := util.ContainsFold(item.Path,track.File)
-			
+
 			if musicBrainzMatch || (titleMatch && artistMatch) {
 				track.ID = item.ID
 				track.Present = true
@@ -219,7 +216,6 @@ func (c *Jellyfin) CreatePlaylist(tracks []*models.Track) error {
 	}
 	var userID string
 	isPublic := c.Cfg.PublicPlaylist
-
 	if c.Cfg.Creds.User != "" {
 		userID, err = c.ResolveUserID()
 		if err != nil {

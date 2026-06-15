@@ -283,46 +283,58 @@ func (c *Plex) GetAuth() error { // Get user token from plex
 	return nil
 }
 func (c *Plex) GetLibrary() error {
-	if (c.Cfg.AdminCreds.User != "" && c.Cfg.AdminCreds.Password != "")  {
-		adminCfg := c.Cfg
-		adminCfg.Creds = config.Credentials{
-			User:     c.Cfg.AdminCreds.User,
-			Password: c.Cfg.AdminCreds.Password,
+	if c.Cfg.AdminCreds.User != "" && c.Cfg.AdminCreds.Password != "" {
+		if c.AdminClient == nil || c.Cfg.Creds.User != c.AdminClient.Cfg.Creds.User {
+			adminCfg := c.Cfg
+			adminCfg.Creds = config.Credentials{
+				User:     c.Cfg.AdminCreds.User,
+				Password: c.Cfg.AdminCreds.Password,
+			}
+
+			c.AdminClient = NewPlex(adminCfg, c.HttpClient)
+
+			if err := c.AdminClient.AddHeader(); err != nil {
+				return err
+			}
+			if err := c.AdminClient.GetAuth(); err != nil {
+				return err
+			}
+			if err := c.AdminClient.getLibraryRequest(); err != nil {
+				return err
+			}
+
+			c.LibraryID = c.AdminClient.LibraryID
+			return nil
 		}
 
-		c.AdminClient = NewPlex(adminCfg, c.HttpClient)
-		if err := c.AdminClient.AddHeader(); err != nil {
-			return err
-		}
-		if err := c.AdminClient.GetAuth(); err != nil {
-			return err
-		}
-
-		err := c.AdminClient.getLibraryRequest()
-		if err != nil {
-			return err
-		}
 		c.LibraryID = c.AdminClient.LibraryID
-
-		return err
-	} else if (c.Cfg.AdminCreds.APIKey != "") {
-		adminCfg := c.Cfg
-		adminCfg.Creds = config.Credentials{
-			APIKey: c.Cfg.AdminCreds.APIKey,
-		}
-
-		c.AdminClient = NewPlex(adminCfg, c.HttpClient)
-		if err := c.AdminClient.AddHeader(); err != nil {
-			return err
-		}
-		err := c.AdminClient.getLibraryRequest()
-		if err != nil {
-			return err
-		}
-		c.LibraryID = c.AdminClient.LibraryID
-
-		return err
+		return nil
 	}
+
+	if c.Cfg.AdminCreds.APIKey != "" {
+		if c.AdminClient == nil || c.Cfg.Creds.APIKey != c.AdminClient.Cfg.Creds.APIKey {
+			adminCfg := c.Cfg
+			adminCfg.Creds = config.Credentials{
+				APIKey: c.Cfg.AdminCreds.APIKey,
+			}
+
+			c.AdminClient = NewPlex(adminCfg, c.HttpClient)
+
+			if err := c.AdminClient.AddHeader(); err != nil {
+				return err
+			}
+			if err := c.AdminClient.getLibraryRequest(); err != nil {
+				return err
+			}
+
+			c.LibraryID = c.AdminClient.LibraryID
+			return nil
+		}
+
+		c.LibraryID = c.AdminClient.LibraryID
+		return nil
+	}
+
 	return c.getLibraryRequest()
 }
 
@@ -575,6 +587,7 @@ func (c *Plex) getServer() error {
 
 func (c *Plex) getPlexSong(track *models.Track, metadata []SongMetadata) (string, error) {
 	normArtist := util.AlnumOnly(track.MainArtist)
+	normalizedTrackTitle := util.NormalizeTitle(track.Title)
 	normalizedCleanTitle := util.NormalizeTitle(track.CleanTitle)
 	normalizedAlbum := util.AlnumOnly(strings.ToLower(track.Album))
 
@@ -592,7 +605,7 @@ func (c *Plex) getPlexSong(track *models.Track, metadata []SongMetadata) (string
 
 		normalizedSongTitle := util.NormalizeTitle(md.Title)
 		musicBrainzMatch := mbid != "" && track.MusicBrainzReleaseTrackID == mbid
-		titleMatch := normalizedSongTitle == normalizedCleanTitle
+		titleMatch := normalizedSongTitle == normalizedTrackTitle || normalizedSongTitle == normalizedCleanTitle
 		albumMatch := util.AlnumOnly(strings.ToLower(md.ParentTitle)) == normalizedAlbum
 		artistMatch := util.ContainsFold(util.AlnumOnly(md.OriginalTitle), normArtist) || util.ContainsFold(util.AlnumOnly(md.GrandparentTitle), normArtist)
 

@@ -1,11 +1,11 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -63,9 +63,9 @@ type ClientConfig struct {
 	PlaylistNFormat string `env:"PLAYLISTNAME_FORMAT" env-default:"week"`
 	PlaylistDescr   string
 	PlaylistID      string
-	PublicPlaylist  bool   `env:"PUBLIC_PLAYLIST" env-default:"false"`
-	Sleep           int `env:"SLEEP" env-default:"2"`
-	HTTPTimeout     int `env:"CLIENT_HTTP_TIMEOUT" env-default:"10"`
+	PublicPlaylist  bool `env:"PUBLIC_PLAYLIST" env-default:"false"`
+	Sleep           int  `env:"SLEEP" env-default:"2"`
+	HTTPTimeout     int  `env:"CLIENT_HTTP_TIMEOUT" env-default:"10"`
 	Creds           Credentials
 	AdminCreds      AdminCredentials
 	Subsonic        SubsonicConfig
@@ -81,27 +81,27 @@ type Credentials struct {
 }
 
 type AdminCredentials struct {
-	APIKey	 string `env:"ADMIN_API_KEY"`
+	APIKey   string `env:"ADMIN_API_KEY"`
 	User     string `env:"ADMIN_SYSTEM_USERNAME"`
 	Password string `env:"ADMIN_SYSTEM_PASSWORD"`
 }
 
 type SubsonicConfig struct {
-	Version        string `env:"SUBSONIC_VERSION" env-default:"1.16.1"`
-	ID             string `env:"CLIENT" env-default:"explo"`
+	Version string `env:"SUBSONIC_VERSION" env-default:"1.16.1"`
+	ID      string `env:"CLIENT" env-default:"explo"`
 }
 
 type DownloadConfig struct {
 	DownloadDir       string `env:"DOWNLOAD_DIR" env-default:"/data/"`
-	PathTemplate	  string `env:"PATH_TEMPLATE"`
+	PathTemplate      string `env:"PATH_TEMPLATE"`
 	Youtube           Youtube
 	YoutubeMusic      YoutubeMusic
 	Slskd             Slskd
 	ExcludeLocal      bool
-	DownloadLimiter   int    `env:"DOWNLOAD_LIMITER" env-default:"1"` // rate limit download operations
-	OverwriteMetadata bool   `env:"OVERWRITE_METADATA" env-default:"false"` // overwrite metadata when migrating downloads
-	KeepPermissions   bool     `env:"KEEP_PERMISSIONS" env-default:"true"` // keep original file permissions when migrating download
-	RenameTrack       bool     `env:"RENAME_TRACK" env-default:"false"`    // Rename track in {title}-{artist} format
+	DownloadLimiter   int      `env:"DOWNLOAD_LIMITER" env-default:"1"`       // rate limit download operations
+	OverwriteMetadata bool     `env:"OVERWRITE_METADATA" env-default:"false"` // overwrite metadata when migrating downloads
+	KeepPermissions   bool     `env:"KEEP_PERMISSIONS" env-default:"true"`    // keep original file permissions when migrating download
+	RenameTrack       bool     `env:"RENAME_TRACK" env-default:"false"`       // Rename track in {title}-{artist} format
 	UseSubDir         bool     `env:"USE_SUBDIRECTORY" env-default:"true"`
 	Discovery         string   `env:"LISTENBRAINZ_DISCOVERY" env-default:"playlist"`
 	Services          []string `env:"DOWNLOAD_SERVICES" env-default:"youtube"`
@@ -150,18 +150,18 @@ type SlskdMon struct {
 }
 
 type DiscoveryConfig struct {
-	Discovery    string `env:"DISCOVERY_SERVICE" env-default:"listenbrainz"`
+	Discovery       string   `env:"DISCOVERY_SERVICE" env-default:"listenbrainz"`
 	ArtistBlacklist []string `env:"ARTIST_BLACKLIST"`
-	Listenbrainz Listenbrainz
+	Listenbrainz    Listenbrainz
 }
 
 type Listenbrainz struct {
-	Discovery              string `env:"LISTENBRAINZ_DISCOVERY" env-default:"playlist"`
-	User                   string `env:"LISTENBRAINZ_USER"`
-	ImportPlaylist         string
-	SingleArtist           bool   `env:"SINGLE_ARTIST" env-default:"true"`
-	CoverArtSize           string `env:"COVER_ART_SIZE" env-default:"250"`
-	EnrichTrackMetadata	   bool   `env:"ENRICH_TRACK_METADATA" env-default:"false"`
+	Discovery           string `env:"LISTENBRAINZ_DISCOVERY" env-default:"playlist"`
+	User                string `env:"LISTENBRAINZ_USER"`
+	ImportPlaylist      string
+	SingleArtist        bool   `env:"SINGLE_ARTIST" env-default:"true"`
+	CoverArtSize        string `env:"COVER_ART_SIZE" env-default:"250"`
+	EnrichTrackMetadata bool   `env:"ENRICH_TRACK_METADATA" env-default:"false"`
 }
 
 type NotifyConfig struct {
@@ -196,22 +196,23 @@ func (cfg *Config) ReadEnv() {
 	// Try to read from .env file first
 	err := cleanenv.ReadConfig(cfg.Flags.CfgPath, cfg)
 	if err != nil {
-		// If the error is because the file doesn't exist, fallback to env vars
-		if errors.Is(err, os.ErrNotExist) {
-			slog.Warn("no config file found, creating empty one", "path", cfg.Flags.CfgPath)
-			if f, err := os.Create(cfg.Flags.CfgPath); err != nil {
-				slog.Warn("could not create config file", "path", cfg.Flags.CfgPath, "context", err.Error())
-			} else if err := f.Close(); err != nil {
-				slog.Warn("could not close config file", "path", cfg.Flags.CfgPath, "context", err.Error())
-			}
-			if err := cleanenv.ReadConfig(cfg.Flags.CfgPath, cfg); err != nil {
-				slog.Error("failed to load config file", "path", cfg.Flags.CfgPath, "context", err.Error())
-				os.Exit(1)
-			}
-		} else {
-			slog.Error("failed to load config file", "path", cfg.Flags.CfgPath, "context", err.Error())
-			os.Exit(1)
-		}
+		// If the error is because the file doesn't exist,
+		// Should use the DB
+		// if errors.Is(err, os.ErrNotExist) {
+		// 	slog.Warn("no config file found, creating empty one", "path", cfg.Flags.CfgPath)
+		// 	if f, err := os.Create(cfg.Flags.CfgPath); err != nil {
+		// 		slog.Warn("could not create config file", "path", cfg.Flags.CfgPath, "context", err.Error())
+		// 	} else if err := f.Close(); err != nil {
+		// 		slog.Warn("could not close config file", "path", cfg.Flags.CfgPath, "context", err.Error())
+		// 	}
+		// 	if err := cleanenv.ReadConfig(cfg.Flags.CfgPath, cfg); err != nil {
+		// 		slog.Error("failed to load config file", "path", cfg.Flags.CfgPath, "context", err.Error())
+		// 		os.Exit(1)
+		// 	}
+		// } else {
+		// 	slog.Error("failed to load config file", "path", cfg.Flags.CfgPath, "context", err.Error())
+		// 	os.Exit(1)
+		// }
 	}
 
 	cfg.CommonFixes()
@@ -265,10 +266,9 @@ func (cfg *Config) HandleDeprecation() { //
 	}
 }
 
-// Generate playlist name and description
-func (cfg *Config) GenPlaylistDetails() {
+func (cfg *Config) GenPlaylistName() { // Generate playlist name and description
 
-	cfg.ClientCfg.PlaylistName = getPlaylistName(cfg.Flags.Playlist, cfg.ClientCfg.PlaylistNFormat, cfg.Persist)
+	cfg.ClientCfg.PlaylistName = getPlaylistName(cfg.Flags.Playlist, cfg.ClientCfg.PlaylistNFormat, cfg.Persist, cfg.DiscoveryCfg.Listenbrainz.User)
 	cfg.ClientCfg.PlaylistDescr = fmt.Sprintf(
 		"Created for %s by Explo, using ListenBrainz recommendations.",
 		cfg.DiscoveryCfg.Listenbrainz.User)
@@ -281,18 +281,17 @@ func (cfg *Config) GenPlaylistDetails() {
 	}
 }
 
-func getPlaylistName(playlistType, format string, persist bool) string {
-
+func getPlaylistName(playlistType, format string, persist bool, lbUser string) string {
+	now := time.Now()
 
 	toTitle := cases.Title(language.Und)
-	base := toTitle.String(playlistType)
+	base := PlaylistNameWithUser(toTitle.String(playlistType), lbUser)
 
-	// Non-persistent or custom playlists always use base name
-	if !persist || strings.HasPrefix(playlistType, "custom-") {
+	// Non-persistent playlists always use base name
+	if !persist {
 		return base
 	}
 
-	now := time.Now()
 	// Explicit date-based naming
 	if format == "date" {
 		return fmt.Sprintf(
@@ -319,4 +318,21 @@ func getPlaylistName(playlistType, format string, persist bool) string {
 		year,
 		week,
 	)
+}
+
+var playlistOwnerUnsafeChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+// PlaylistNameWithUser prefixes generated playlist names with the ListenBrainz
+// username so multiple users can safely create the same logical playlist type
+// on the same media server without colliding.
+func ListenBrainzUserSlug(lbUser string) string {
+	return strings.Trim(playlistOwnerUnsafeChars.ReplaceAllString(strings.TrimSpace(lbUser), "-"), "-._")
+}
+
+func PlaylistNameWithUser(playlistName, lbUser string) string {
+	owner := ListenBrainzUserSlug(lbUser)
+	if owner == "" {
+		return playlistName
+	}
+	return owner + "-" + playlistName
 }

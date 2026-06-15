@@ -21,12 +21,8 @@ Explo uses the [ListenBrainz](https://listenbrainz.org/) recommendation engine t
   - Weekly Exploration
   - Weekly Jams
   - Daily Jams
-- Import custom playlists from:
-  - Apple Music
-  - ListenBrainz
-  - Spotify
 - Request tracks from YouTube, Soulseek, or both
-- Add metadata to downloaded tracks
+- Add metadata (title, artist, album) to YouTube downloads
 - Create playlists in your music system
 - Keep previous playlists for later listening
 ---
@@ -61,6 +57,6 @@ Explo uses the following 3rd-party libraries:
 
 ## Contributing
 
-Contributions are always welcome! If you have any suggestions, bug reports, or feature requests, please open an issue or submit a pull request (be sure to [read the development section](https://github.com/LumePart/Explo/wiki/7.-Development) of our wiki).
+Contributions are always welcome! If you have any suggestions, bug reports, or feature requests, please open an issue or submit a pull request.
 
 For discussion regarding development or help, join our [Discord!](https://discord.gg/uFWWPaN2zk)

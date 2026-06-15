@@ -34,7 +34,7 @@ func (cfg *Config) GetFlags() error {
 	flag.StringVar(&searchMBID, "search-mbid", "", "Test Plex search for a single recording MBID (resolves via ListenBrainz, then searches your library)")
 	flag.BoolVar(&refreshOnly, "refresh-only", false, "Trigger alibrary rescan and exit; skips discovery and downloads")
 
-  flag.Parse()
+  	flag.Parse()
 
 	if showVersion {
 		fmt.Println(Version)
@@ -43,8 +43,8 @@ func (cfg *Config) GetFlags() error {
 	persistSet := flag.Lookup("persist").Changed
 	cfgSet := flag.Lookup("config").Changed
 
-	
-	
+
+
 	if searchMBID == "" {
 		if !contains(validPlaylists, playlist) && !strings.HasPrefix(playlist, "custom-") {
 		  return fmt.Errorf("flag validation error: invalid playlist %s (must be one of: %s, or a custom-* id)",

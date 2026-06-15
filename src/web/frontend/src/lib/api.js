@@ -83,10 +83,13 @@ export async function saveSchedule(name, enabled, day, hour, minute) {
 }
 
 export async function wizardStep1(user, playlists, discovery_mode) {
+  const body = typeof user === 'object' && user !== null
+    ? user
+    : { user, playlists, discovery_mode }
   const res = await apiFetch('/api/ui/wizard/step1', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user, playlists, discovery_mode }),
+    body: JSON.stringify(body),
   })
   if (!res.ok) throw new Error(await res.text())
 }
@@ -192,33 +195,54 @@ export async function refreshCustomPlaylist(id) {
   return res.json()
 }
 
+export async function fetchBackgroundArt() {
+  try {
+    const res = await fetch('/api/ui/background-art')
+    if (!res.ok) return null
+    const { url } = await res.json()
+    return url || null
+  } catch {
+    return null
+  }
+}
+
+export async function fetchAdminResource(resource) {
+  const res = await apiFetch(`/api/ui/admin/${encodeURIComponent(resource)}`)
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function createAdminResource(resource, body) {
+  const res = await apiFetch(`/api/ui/admin/${encodeURIComponent(resource)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function updateAdminResource(resource, id, body) {
+  const res = await apiFetch(`/api/ui/admin/${encodeURIComponent(resource)}/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function deleteAdminResource(resource, id) {
+  const res = await apiFetch(`/api/ui/admin/${encodeURIComponent(resource)}/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(await res.text())
+}
+
 export async function savePathTemplate(template) {
   const res = await apiFetch('/api/ui/config/path-template', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ template }),
   })
-  if (!res.ok) throw new Error(await res.text())
-}
-
-export async function fetchPathTemplatePresets() {
-  const res = await apiFetch('/api/ui/path-templates')
-  if (!res.ok) throw new Error(await res.text())
-  return res.json()
-}
-
-export async function addPathTemplatePreset(name, template) {
-  const res = await apiFetch('/api/ui/path-templates', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, template }),
-  })
-  if (!res.ok) throw new Error(await res.text())
-  return res.json()
-}
-
-export async function deletePathTemplatePreset(name) {
-  const res = await apiFetch(`/api/ui/path-templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(await res.text())
 }
 
@@ -231,13 +255,29 @@ export async function saveEnrichMetadata(enabled) {
   if (!res.ok) throw new Error(await res.text())
 }
 
-export async function fetchBackgroundArt() {
-  try {
-    const res = await fetch('/api/ui/background-art')
-    if (!res.ok) return null
-    const { url } = await res.json()
-    return url || null
-  } catch {
-    return null
-  }
+export async function fetchPathTemplates() {
+  const res = await apiFetch('/api/ui/path-templates')
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function createPathTemplate(name, template) {
+  const res = await apiFetch('/api/ui/path-templates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, template }),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
+}
+
+export async function deletePathTemplate(name) {
+  const res = await apiFetch(`/api/ui/path-templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(await res.text())
+}
+
+export async function fetchServers() {
+  const res = await apiFetch('/api/ui/servers')
+  if (!res.ok) throw new Error(await res.text())
+  return res.json()
 }

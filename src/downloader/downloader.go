@@ -222,18 +222,18 @@ func sanitize(s string) string {
 
 func buildTrackPath(template string, track *models.Track) string {
 	replacements := map[string]string{
-		"Artist":		sanitize(track.MainArtist),
-		"Album":		sanitize(track.Album),
-		"AlbumName":	sanitize(track.Album),
-		"TrackName":	sanitize(track.CleanTitle),
-		"TrackNumber":	fmt.Sprintf("%02d", track.TrackNumber),
-		"DiscNumber":	fmt.Sprintf("%02d", track.DiscNumber),
-		"Year":			strconv.Itoa(track.OriginalYear),
-		"File":			sanitize(track.File),
-		"ext":			strings.TrimPrefix(filepath.Ext(track.File), "."),
+		"ARTIST":		sanitize(track.MainArtist),
+		"ALBUM":		sanitize(track.Album),
+		"ALBUMNAME":	sanitize(track.Album),
+		"TRACKNAME":	sanitize(track.CleanTitle),
+		"TRACKNUMER":	fmt.Sprintf("%02d", track.TrackNumber),
+		"DISCNUMBER":	fmt.Sprintf("%02d", track.DiscNumber),
+		"YEAR":			strconv.Itoa(track.OriginalYear),
+		"FILE":			sanitize(track.File),
+		"EXT":			strings.TrimPrefix(filepath.Ext(track.File), "."),
 	}
 
-	result := template
+	result := strings.ToUpper(template)
 
 	for key, value := range replacements {
 		result = strings.ReplaceAll(
@@ -272,15 +272,9 @@ func (c *DownloadClient) MoveDownload(srcDir, destDir, trackPath string, track *
 	}()
 
 	var dstFile string
-	
+
 	if c.Cfg.PathTemplate != "" {
 		relativePath := buildTrackPath(c.Cfg.PathTemplate, track)
-		track.File = filepath.Base(relativePath)
-		if track.File == "." || track.File == string(filepath.Separator) {
-			track.File = getFilename(track.CleanTitle, track.MainArtist) + filepath.Ext(track.File)
-			relativePath = filepath.Dir(relativePath) + string(filepath.Separator) + track.File
-			slog.Warn(fmt.Sprintf("invalid path template result for track '%s' by '%s', using filename '%s' instead", track.Title, track.Artist, track.File))
-		}
 		dstFile = filepath.Join(destDir, relativePath)
 	} else {
 		if err = os.MkdirAll(destDir, os.ModePerm); err != nil {

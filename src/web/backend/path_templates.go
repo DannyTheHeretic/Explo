@@ -2,12 +2,13 @@ package backend
 
 import (
 	"encoding/json"
-	"log/slog"
+	"errors"
+	"explo/src/models"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 // PathTemplatePreset is a named folder-structure template saved by the user.
@@ -16,97 +17,96 @@ type PathTemplatePreset struct {
 	Template string `json:"template"`
 }
 
-func pathTemplatesFilePath(cfgDir string) string {
-	return filepath.Join(cfgDir, "path-templates.json")
+type pathTemplateResponse struct {
+	Name     string `json:"name"`
+	Template string `json:"template"`
+	BuiltIn  bool   `json:"built_in"`
 }
 
-func loadPathTemplates(cfgDir string) []PathTemplatePreset {
-	data, err := os.ReadFile(pathTemplatesFilePath(cfgDir))
-	if err != nil {
-		return nil
-	}
-	var out []PathTemplatePreset
-	if err := json.Unmarshal(data, &out); err != nil {
-		slog.Warn("path-templates: failed to parse", "err", err)
-		return nil
-	}
-	return out
+var builtinPathTemplates = []pathTemplateResponse{
+	{Name: "Artist / Album", Template: "{{artist}}/{{album}}/{{title}}", BuiltIn: true},
+	{Name: "Artist - Title", Template: "{{artist}} - {{title}}", BuiltIn: true},
+	{Name: "Album / Track", Template: "{{album}}/{{track}} - {{title}}", BuiltIn: true},
 }
 
-func savePathTemplates(cfgDir string, presets []PathTemplatePreset) error {
-	raw, err := json.MarshalIndent(presets, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(pathTemplatesFilePath(cfgDir), raw, 0644)
-}
 
-// handlePathTemplates handles GET and POST for /api/ui/path-templates.
 func (s *Server) handlePathTemplates(w http.ResponseWriter, r *http.Request) {
-	cfgDir := s.cfg.WebDataDir
 	switch r.Method {
 	case http.MethodGet:
-		presets := loadPathTemplates(cfgDir)
-		if presets == nil {
-			presets = []PathTemplatePreset{}
+		var rows []models.PathTemplatePreset
+		if err := s.db.Order("name").Find(&rows).Error; err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		items := append([]pathTemplateResponse{}, builtinPathTemplates...)
+		seen := map[string]bool{}
+		for _, item := range items {
+			seen[item.Name] = true
+		}
+		for _, row := range rows {
+			if row.Name == "" || row.Template == "" || seen[row.Name] {
+				continue
+			}
+			items = append(items, pathTemplateResponse{Name: row.Name, Template: row.Template})
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(presets); err != nil {
-			slog.Error("failed encoding path templates", "err", err.Error())
-		}
+		_ = json.NewEncoder(w).Encode(items)
 	case http.MethodPost:
-		var body PathTemplatePreset
+		var body struct {
+			Name     string `json:"name"`
+			Template string `json:"template"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		body.Name = strings.TrimSpace(body.Name)
+		body.Template = strings.TrimSpace(body.Template)
 		if body.Name == "" || body.Template == "" {
 			http.Error(w, "name and template are required", http.StatusBadRequest)
 			return
 		}
-		presets := loadPathTemplates(cfgDir)
-		presets = append(presets, body)
-		if err := savePathTemplates(cfgDir, presets); err != nil {
+		var row models.PathTemplatePreset
+		if err := s.db.Where("name = ?", body.Name).First(&row).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			row = models.PathTemplatePreset{Name: body.Name}
+		}
+		row.Template = body.Template
+		if row.ID == 0 {
+			if err := s.db.Create(&row).Error; err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else if err := s.db.Save(&row).Error; err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		if err := json.NewEncoder(w).Encode(body); err != nil {
-			slog.Error("failed encoding path template", "err", err.Error())
-		}
+		_ = json.NewEncoder(w).Encode(pathTemplateResponse{Name: row.Name, Template: row.Template})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-// handleDeletePathTemplate handles DELETE /api/ui/path-templates/{name}.
 func (s *Server) handleDeletePathTemplate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	name, err := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/api/ui/path-templates/"))
+	if err != nil || strings.TrimSpace(name) == "" {
+		http.Error(w, "invalid template name", http.StatusBadRequest)
 		return
 	}
-	raw := strings.TrimPrefix(r.URL.Path, "/api/ui/path-templates/")
-	name, err := url.PathUnescape(raw)
-	if err != nil || name == "" {
-		http.Error(w, "invalid name", http.StatusBadRequest)
-		return
-	}
-	cfgDir := s.cfg.WebDataDir
-	presets := loadPathTemplates(cfgDir)
-	filtered := presets[:0]
-	for _, p := range presets {
-		if p.Name != name {
-			filtered = append(filtered, p)
+	for _, item := range builtinPathTemplates {
+		if item.Name == name {
+			http.Error(w, "built-in templates cannot be deleted", http.StatusBadRequest)
+			return
 		}
 	}
-	if len(filtered) == len(presets) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if err := savePathTemplates(cfgDir, filtered); err != nil {
+	if err := s.db.Where("name = ?", name).Delete(&models.PathTemplatePreset{}).Error; err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNoContent)
 }

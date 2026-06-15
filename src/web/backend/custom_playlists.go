@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"explo/src/discovery"
+	"explo/src/models"
 	"explo/src/util"
-	"explo/src/web"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -32,6 +32,7 @@ type CustomPlaylist struct {
 	RefreshDays     int       `json:"refresh_days"`
 	ColorIndex      int       `json:"color_index"`
 	LastFetched     time.Time `json:"last_fetched"`
+	UserID          uint      `json:"user_id,omitempty"`
 }
 
 // CustomPlaylistArtworkPath returns the local file path where a playlist's
@@ -92,28 +93,66 @@ func extractLBMBID(raw string) (string, error) {
 	return m, nil
 }
 
+func customPlaylistFromModel(row models.Playlist) CustomPlaylist {
+	lastFetched := time.Time{}
+	if row.LastFetched != nil {
+		lastFetched = *row.LastFetched
+	}
+	return CustomPlaylist{
+		ID:              row.Name,
+		Name:            firstNonEmpty(row.DisplayName, row.Name),
+		Source:          row.Source,
+		SourceURL:       row.SourceURL,
+		LBMBID:          row.LBMBID,
+		ArtworkURL:      row.ArtworkURL,
+		ArtworkUploaded: row.ArtworkUploaded,
+		RefreshDays:     row.RefreshDays,
+		ColorIndex:      row.ColorIndex,
+		LastFetched:     lastFetched,
+		UserID:          row.UserID,
+	}
+}
+
+func (s *Server) loadCustomPlaylistRows(userID uint) ([]models.Playlist, error) {
+	var rows []models.Playlist
+	query := s.db.Where("kind = ?", models.PlaylistKindCustom).Order("id")
+	if userID != 0 {
+		query = query.Where("user_id = ?", userID)
+	}
+	if err := query.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (s *Server) loadCustomPlaylistsForUser(userID uint) ([]CustomPlaylist, error) {
+	rows, err := s.loadCustomPlaylistRows(userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CustomPlaylist, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, customPlaylistFromModel(row))
+	}
+	return out, nil
+}
+
+func defaultCustomSchedule(refreshDays int) string {
+	if refreshDays > 0 {
+		return "0 4 * * *"
+	}
+	return ""
+}
+
 func customPlaylistsPath(cfgDir string) string {
 	return filepath.Join(cfgDir, "custom-playlists.json")
 }
 
-// customEnvPrefix converts a playlist name like "Today's Hits"
-// to an env-var prefix like "CUSTOM_TODAYS_HITS".
-// Non-alphanumeric characters are collapsed into underscores.
-func customEnvPrefix(name string) string {
-	var b strings.Builder
-	prevUnderscore := true // start true so leading separators are skipped
-	for _, r := range strings.ToUpper(name) {
-		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			prevUnderscore = false
-		} else if !prevUnderscore {
-			b.WriteRune('_')
-			prevUnderscore = true
-		}
-	}
-	return "CUSTOM_" + strings.TrimRight(b.String(), "_")
+// customEnvPrefix converts a custom playlist ID like "custom-a1b2c3d4"
+// to an env-var prefix like "CUSTOM_A1B2C3D4".
+func customEnvPrefix(id string) string {
+	return strings.ToUpper(strings.ReplaceAll(id, "-", "_"))
 }
-
 
 func loadCustomPlaylists(cfgDir string) []CustomPlaylist {
 	data, err := os.ReadFile(customPlaylistsPath(cfgDir))
@@ -124,6 +163,21 @@ func loadCustomPlaylists(cfgDir string) []CustomPlaylist {
 	if err := json.Unmarshal(data, &out); err != nil {
 		slog.Warn("custom-playlists: failed to parse metadata", "err", err)
 		return nil
+	}
+	return out
+}
+
+func customPlaylistsForUser(playlists []CustomPlaylist, userID uint) []CustomPlaylist {
+	if userID == 0 {
+		return playlists
+	}
+	out := make([]CustomPlaylist, 0, len(playlists))
+	for _, p := range playlists {
+		// Treat legacy playlists without a user as visible to existing users until
+		// they are re-imported or edited. New imports are user-scoped.
+		if p.UserID == 0 || p.UserID == userID {
+			out = append(out, p)
+		}
 	}
 	return out
 }
@@ -210,14 +264,14 @@ func isDuplicate(source, sourceID string, existing []CustomPlaylist) (string, bo
 // handleGetCustomPlaylists returns all saved custom playlists with a track_count
 // derived from their cache file (if present) and the current sync schedule from .env.
 func (s *Server) handleGetCustomPlaylists(w http.ResponseWriter, r *http.Request) {
-	playlists := loadCustomPlaylists(s.cfg.WebDataDir)
-
-	// Read .env to look up schedule state for each custom playlist.
-	var envValues map[string]string
-	if data, err := os.ReadFile(s.cfg.WebEnvPath); err == nil {
-		envValues = parseEnvText(string(data))
-	} else {
-		envValues = map[string]string{}
+	userID, err := resolveUserID(w, r)
+	if err != nil {
+		return
+	}
+	playlists, err := s.loadCustomPlaylistRows(userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	type respItem struct {
@@ -225,14 +279,13 @@ func (s *Server) handleGetCustomPlaylists(w http.ResponseWriter, r *http.Request
 		TrackCount int    `json:"track_count"`
 		Schedule   string `json:"schedule"`
 		Flags      string `json:"flags"`
+		Enabled    bool   `json:"enabled"`
 	}
 	items := make([]respItem, 0, len(playlists))
-	for _, p := range playlists {
-		count := customPlaylistTrackCount(s.cfg.WebDataDir, p.ID)
-		prefix := customEnvPrefix(p.Name)
-		sched := envValues[prefix+"_SCHEDULE"]
-		flags := envValues[prefix+"_FLAGS"]
-		items = append(items, respItem{CustomPlaylist: p, TrackCount: count, Schedule: sched, Flags: flags})
+	for _, row := range playlists {
+		cp := customPlaylistFromModel(row)
+		count := customPlaylistTrackCount(s.cfg.WebDataDir, cp.ID)
+		items = append(items, respItem{CustomPlaylist: cp, TrackCount: count, Schedule: row.Schedule, Flags: row.Flags, Enabled: row.Enabled})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -254,7 +307,16 @@ func (s *Server) handleImportCustomPlaylist(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	existing := loadCustomPlaylists(s.cfg.WebDataDir)
+	userID, err := resolveUserID(w, r)
+	if err != nil {
+		return
+	}
+	existing, err := s.loadCustomPlaylistsForUser(userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	allPlaylists := loadCustomPlaylists(s.cfg.WebDataDir)
 
 	if body.Source == "" {
 		body.Source = "listenbrainz"
@@ -335,26 +397,38 @@ func (s *Server) handleImportCustomPlaylist(w http.ResponseWriter, r *http.Reque
 		RefreshDays: body.RefreshDays,
 		ColorIndex:  len(existing),
 		LastFetched: time.Now().UTC(),
+		UserID:      userID,
 	}
-	existing = append(existing, cp)
-	if err := saveCustomPlaylists(s.cfg.WebDataDir, existing); err != nil {
-		slog.Error("custom-playlists: failed to save metadata", "err", err)
+	prefix := customEnvPrefix(id)
+	lastFetched := cp.LastFetched
+	playlist := models.Playlist{
+		Name:        id,
+		DisplayName: name,
+		UserID:      userID,
+		Kind:        models.PlaylistKindCustom,
+		Source:      body.Source,
+		SourceURL:   body.URL,
+		LBMBID:      lbMBID,
+		EnvPrefix:   prefix,
+		Schedule:    defaultCustomSchedule(body.RefreshDays),
+		Flags:       "--playlist " + id,
+		Enabled:     true,
+		RefreshDays: body.RefreshDays,
+		ColorIndex:  cp.ColorIndex,
+		ArtworkURL:  artworkURL,
+		LastFetched: &lastFetched,
+	}
+	if err := s.db.Create(&playlist).Error; err != nil {
 		http.Error(w, "failed to save playlist metadata: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Mark the playlist as active by writing FLAGS. For non-Never cadence, also write
-	// a daily poll SCHEDULE — RefreshDays in the JSON gates the actual refresh interval
-	// inside the cron task body. "Never" imports get FLAGS only so the card is usable
-	// for manual runs while the schedule editor pre-selects "Never".
-	prefix := customEnvPrefix(name)
-	envUpdates := map[string]string{
-		prefix + "_FLAGS": "--playlist " + id,
+	// Keep the old metadata file as a compatibility index for CLI artwork/name
+	// lookups and existing installs while the database is now authoritative.
+	allPlaylists = append(allPlaylists, cp)
+	if err := saveCustomPlaylists(s.cfg.WebDataDir, allPlaylists); err != nil {
+		slog.Warn("custom-playlists: failed to update legacy metadata", "err", err)
 	}
-	if body.RefreshDays > 0 {
-		envUpdates[prefix+"_SCHEDULE"] = "0 4 * * *"
-	}
-	_ = updateEnvKeys(s.cfg.WebEnvPath, envUpdates, web.SampleEnv)
 
 	slog.Info("custom-playlists: import complete", "id", id, "name", name)
 
@@ -393,20 +467,18 @@ func (s *Server) handleRefreshCustomPlaylist(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	playlists := loadCustomPlaylists(s.cfg.WebDataDir)
-	idx := -1
-	for i, p := range playlists {
-		if p.ID == id {
-			idx = i
-			break
-		}
+	userID, err := resolveUserID(w, r)
+	if err != nil {
+		return
 	}
-	if idx == -1 {
+
+	var playlist models.Playlist
+	if err := s.db.Where("user_id = ? AND name = ? AND kind = ?", userID, id, models.PlaylistKindCustom).First(&playlist).Error; err != nil {
 		http.Error(w, "playlist not found", http.StatusNotFound)
 		return
 	}
 
-	p := playlists[idx]
+	p := customPlaylistFromModel(playlist)
 	slog.Info("custom-playlists: manual refresh", "id", id, "source", p.Source)
 
 	result, err := fetchCustomPlaylistTracks(p)
@@ -423,9 +495,18 @@ func (s *Server) handleRefreshCustomPlaylist(w http.ResponseWriter, r *http.Requ
 	}
 	go downloadAndCacheCovers(s.cfg.WebDataDir, id, tracks)
 
-	playlists[idx].LastFetched = time.Now().UTC()
+	now := time.Now().UTC()
+	if err := s.db.Model(&models.Playlist{}).Where("id = ?", playlist.ID).Update("last_fetched", &now).Error; err != nil {
+		slog.Warn("custom-playlists: failed to update DB last_fetched after refresh", "err", err)
+	}
+	playlists := loadCustomPlaylists(s.cfg.WebDataDir)
+	for i := range playlists {
+		if playlists[i].ID == id && playlists[i].UserID == userID {
+			playlists[i].LastFetched = now
+		}
+	}
 	if err := saveCustomPlaylists(s.cfg.WebDataDir, playlists); err != nil {
-		slog.Warn("custom-playlists: failed to update last_fetched after refresh", "err", err)
+		slog.Warn("custom-playlists: failed to update legacy last_fetched after refresh", "err", err)
 	}
 
 	slog.Info("custom-playlists: refresh complete", "id", id, "tracks", len(tracks))
@@ -448,42 +529,38 @@ func (s *Server) handleDeleteCustomPlaylist(w http.ResponseWriter, r *http.Reque
 	deleteTracks := r.URL.Query().Get("delete_tracks") == "true"
 	slog.Info("custom-playlists: delete request", "id", id, "delete_tracks", deleteTracks)
 
-	existing := loadCustomPlaylists(s.cfg.WebDataDir)
-	filtered := existing[:0]
-	found := false
-	var deletedName string
-	for _, p := range existing {
-		if p.ID == id {
-			found = true
-			deletedName = p.Name
-		} else {
-			filtered = append(filtered, p)
-		}
-	}
-	if !found {
-		http.Error(w, "playlist not found", http.StatusNotFound)
+	userID, err := resolveUserID(w, r)
+	if err != nil {
 		return
 	}
 
-	if err := saveCustomPlaylists(s.cfg.WebDataDir, filtered); err != nil {
-		http.Error(w, "failed to save: "+err.Error(), http.StatusInternalServerError)
+	var playlist models.Playlist
+	if err := s.db.Where("user_id = ? AND name = ? AND kind = ?", userID, id, models.PlaylistKindCustom).First(&playlist).Error; err != nil {
+		http.Error(w, "playlist not found", http.StatusNotFound)
 		return
+	}
+	if err := s.db.Delete(&playlist).Error; err != nil {
+		http.Error(w, "failed to delete playlist: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	existing := loadCustomPlaylists(s.cfg.WebDataDir)
+	filtered := existing[:0]
+	for _, p := range existing {
+		if p.ID != id || (p.UserID != 0 && p.UserID != userID) {
+			filtered = append(filtered, p)
+		}
+	}
+	if err := saveCustomPlaylists(s.cfg.WebDataDir, filtered); err != nil {
+		slog.Warn("custom-playlists: failed to update legacy metadata after delete", "err", err)
 	}
 
 	// Remove the cache file; ignore error if already gone
 	cachePath := filepath.Join(s.cfg.WebDataDir, "cache", id+".json")
 	_ = os.Remove(cachePath)
 
-	// Remove schedule env vars from .env
-	prefix := customEnvPrefix(deletedName)
-	_ = updateEnvKeys(s.cfg.WebEnvPath, map[string]string{
-		prefix + "_SCHEDULE": "",
-		prefix + "_FLAGS":    "",
-	}, web.SampleEnv)
-
 	if deleteTracks {
-		if data, err := os.ReadFile(s.cfg.WebEnvPath); err == nil {
-			env := parseEnvText(string(data))
+		if env, err := s.getAllConfigValues(); err == nil {
 			if env["USE_SUBDIRECTORY"] == "true" && env["DOWNLOAD_DIR"] != "" {
 				prefix := cases.Title(language.Und).String(id) // "custom-1234" -> "Custom-1234"
 				removed, err := util.RemoveDirsByPrefix(env["DOWNLOAD_DIR"], prefix)
@@ -521,4 +598,61 @@ func customPlaylistTrackCount(cfgDir, id string) int {
 		return 0
 	}
 	return len(m.Tracks)
+}
+
+func (s *Server) migrateLegacyCustomPlaylistsToDB() error {
+	legacy := loadCustomPlaylists(s.cfg.WebDataDir)
+	if len(legacy) == 0 {
+		return nil
+	}
+	var firstUser models.User
+	if err := s.db.Order("id").First(&firstUser).Error; err != nil {
+		return err
+	}
+	for _, cp := range legacy {
+		userID := cp.UserID
+		if userID == 0 {
+			userID = firstUser.ID
+		}
+		var count int64
+		if err := s.db.Model(&models.Playlist{}).Where("user_id = ? AND name = ?", userID, cp.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			continue
+		}
+		prefix := customEnvPrefix(cp.ID)
+		var schedule models.PlaylistSchedule
+		scheduleText := defaultCustomSchedule(cp.RefreshDays)
+		flags := "--playlist " + cp.ID
+		enabled := true
+		if err := s.db.Where("user_id = ? AND env_prefix = ?", userID, prefix).First(&schedule).Error; err == nil {
+			scheduleText = schedule.Schedule
+			flags = schedule.Flags
+			enabled = flags != ""
+		}
+		lastFetched := cp.LastFetched
+		playlist := models.Playlist{
+			Name:            cp.ID,
+			DisplayName:     cp.Name,
+			UserID:          userID,
+			Kind:            models.PlaylistKindCustom,
+			Source:          firstNonEmpty(cp.Source, "listenbrainz"),
+			SourceURL:       cp.SourceURL,
+			LBMBID:          cp.LBMBID,
+			EnvPrefix:       prefix,
+			Schedule:        scheduleText,
+			Flags:           flags,
+			Enabled:         enabled,
+			RefreshDays:     cp.RefreshDays,
+			ColorIndex:      cp.ColorIndex,
+			ArtworkURL:      cp.ArtworkURL,
+			ArtworkUploaded: cp.ArtworkUploaded,
+			LastFetched:     &lastFetched,
+		}
+		if err := s.db.Create(&playlist).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }

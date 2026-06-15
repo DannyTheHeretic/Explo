@@ -1,198 +1,174 @@
-import { useState, useEffect, useRef } from 'react'
-import { motion, AnimatePresence } from 'motion/react'
-import { Button } from './common'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  createPathTemplate,
+  deletePathTemplate,
+  fetchPathTemplates,
+  saveEnrichMetadata,
+  savePathTemplate,
+} from '../../lib/api'
+import { Button, TextField } from './common'
+import { ToggleRow } from './Toggle'
 
-export const SEED_PRESETS = [
-  { name: 'Artist / Album / Track', template: '{{Artist}}/{{Album}}/{{TrackName}}.{{ext}}' },
-  { name: 'Flat',                   template: '{{Artist}} - {{TrackName}}.{{ext}}' },
+const tokenHelp = [
+  '{{artist}}',
+  '{{album}}',
+  '{{track}}',
+  '{{title}}',
 ]
 
-// enriched: requires ENRICH_METADATA=true (or a source that provides the field)
-const TEMPLATE_VARS = [
-  { name: 'Artist',      example: 'Radiohead',     enriched: false },
-  { name: 'Album',       example: 'OK Computer',   enriched: false },
-  { name: 'TrackName',   example: 'Karma Police',  enriched: false },
-  { name: 'ext',         example: 'flac',          enriched: false },
-  { name: 'TrackNumber', example: '03',            enriched: true  },
-  { name: 'DiscNumber',  example: '01',            enriched: true  },
-  { name: 'Year',        example: '1997',          enriched: true  },
-  { name: 'File',        example: 'filename',      enriched: false },
-]
-
-const SAMPLE_META = {
-  Artist: 'Radiohead', Album: 'OK Computer', AlbumName: 'OK Computer',
-  TrackName: 'Karma Police', TrackNumber: '03', DiscNumber: '01',
-  Year: '1997', File: 'karma_police', ext: 'flac',
-}
-
-function sanitizeSegment(v) {
-  return String(v).replace(/[/\\:*?"<>|]/g, '')
-}
-
-function resolveTemplate(tpl) {
-  return tpl.replace(/\{\{\s*([A-Za-z]+)\s*\}\}/g, (_, name) => {
-    const key = Object.keys(SAMPLE_META).find(k => k.toLowerCase() === name.toLowerCase())
-    return key ? sanitizeSegment(SAMPLE_META[key]) : `{{${name}}}`
-  })
-}
-
-export function PathLine({ template }) {
-  const parts = resolveTemplate(template).split('/')
-  return parts.map((part, i) => {
-    const isFile = i === parts.length - 1 && part.includes('.')
-    return (
-      <span key={i}>
-        {i > 0 && <span className="text-white px-[3px]" style={{ opacity: 0.25 }}>/</span>}
-        <span className={isFile ? 'text-accent' : 'text-white'}>{part || '·'}</span>
-      </span>
-    )
-  })
-}
-
-// Props:
-//   onClose       — called on cancel / backdrop / Escape
-//   onSave        — called with { name, template } when user saves the preset
-//   enrichEnabled — whether rich metadata is on; gates enriched variable chips
-export function PathTemplateModal({ onClose, onSave, enrichEnabled = false }) {
+export function PathTemplateModal({ open, value, enrichEnabled = false, onClose, onChange, onEnrichChange }) {
+  const [template, setTemplate] = useState(value || '')
+  const [enrich, setEnrich] = useState(!!enrichEnabled)
+  const [templates, setTemplates] = useState([])
   const [name, setName] = useState('')
-  const [template, setTemplate] = useState(SEED_PRESETS[0].template)
-  const nameInputRef = useRef(null)
-  const templateInputRef = useRef(null)
+  const [status, setStatus] = useState('')
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    const handle = e => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', handle)
-    setTimeout(() => nameInputRef.current?.focus(), 60)
-    return () => window.removeEventListener('keydown', handle)
-  }, [onClose])
+    if (!open) return
+    setTemplate(value || '')
+    setEnrich(!!enrichEnabled)
+    setStatus('')
+    setError('')
+    loadTemplates()
+  }, [open, value, enrichEnabled])
 
-  const insertVariable = varName => {
-    const input = templateInputRef.current
-    if (!input) return
-    const token = `{{${varName}}}`
-    const start = input.selectionStart ?? template.length
-    const end = input.selectionEnd ?? template.length
-    const next = template.slice(0, start) + token + template.slice(end)
-    setTemplate(next)
-    const pos = start + token.length
-    setTimeout(() => { input.focus(); input.setSelectionRange(pos, pos) }, 0)
+  async function loadTemplates() {
+    try {
+      setTemplates(await fetchPathTemplates())
+    } catch (err) {
+      setError(err.message || String(err))
+    }
   }
 
-  const handleSave = () => {
-    onSave({ name: name.trim() || 'Custom template', template })
+  const selected = useMemo(() => templates.find(item => item.template === template), [templates, template])
+
+  if (!open) return null
+
+  async function applyTemplate() {
+    setError('')
+    try {
+      await savePathTemplate(template)
+      await saveEnrichMetadata(enrich)
+      onChange?.(template)
+      onEnrichChange?.(enrich)
+      onClose?.()
+    } catch (err) {
+      setError(err.message || String(err))
+    }
+  }
+
+  async function savePreset() {
+    if (!name.trim() || !template.trim()) return
+    setError('')
+    try {
+      await createPathTemplate(name.trim(), template.trim())
+      setName('')
+      setStatus('Preset saved.')
+      await loadTemplates()
+    } catch (err) {
+      setError(err.message || String(err))
+    }
+  }
+
+  async function removePreset(item) {
+    if (item.built_in) return
+    setError('')
+    try {
+      await deletePathTemplate(item.name)
+      setStatus('Preset deleted.')
+      await loadTemplates()
+    } catch (err) {
+      setError(err.message || String(err))
+    }
   }
 
   return (
-    <motion.div
-      key="modal-overlay"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.16 }}
-      onClick={e => { if (e.target === e.currentTarget) onClose() }}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 50,
-        background: 'rgba(0,0,0,0.72)',
-        backdropFilter: 'blur(6px)',
-        WebkitBackdropFilter: 'blur(6px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 24,
-      }}
-    >
-      <motion.div
-        key="modal-dialog"
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 8 }}
-        transition={{ duration: 0.18 }}
-        className="w-full max-w-[540px] border border-ui-border rounded-lg overflow-hidden"
-        style={{
-          background: '#0d0d0df0',
-          backdropFilter: 'blur(8px)',
-          WebkitBackdropFilter: 'blur(8px)',
-          boxShadow: '0 24px 64px #00000099',
-        }}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-ui-border">
-          <span className="text-[15px] font-semibold text-white whitespace-nowrap">New folder template</span>
-          <button
-            onClick={onClose}
-            className="text-muted text-[22px] leading-none cursor-pointer bg-transparent border-none px-1 hover:text-white transition-colors"
-          >
-            ×
-          </button>
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onMouseDown={onClose}>
+      <div className="w-full max-w-3xl bg-panel border border-ui-border rounded-[12px] shadow-card p-5" onMouseDown={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4 mb-5">
+          <div>
+            <div className="text-[11px] text-muted uppercase tracking-[1px] mb-1">Path Template</div>
+            <h2 className="text-[18px] text-white font-semibold">Configure track paths</h2>
+            <p className="text-[12px] text-muted mt-1">Pick a preset or build a custom template for downloaded track paths.</p>
+          </div>
+          <button className="text-muted hover:text-white text-[20px] leading-none" onClick={onClose}>×</button>
         </div>
 
-        {/* Body */}
-        <div className="px-5 pt-5 pb-2">
-          <input
-            ref={nameInputRef}
-            className="w-full bg-transparent border-none text-accent text-[16px] font-semibold outline-none placeholder:text-muted placeholder:font-normal mb-5"
-            placeholder="Template name"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            spellCheck={false}
-          />
+        {error && <div className="mb-3 text-[12px] text-danger whitespace-pre-wrap">{error}</div>}
+        {status && !error && <div className="mb-3 text-[12px] text-muted">{status}</div>}
 
-          <div className="border-t border-ui-border pt-4 flex flex-col gap-3">
-            <input
-              ref={templateInputRef}
-              className="w-full bg-well border border-ui-border text-white rounded-[6px] px-3 py-2.5 text-[13px] outline-none focus:border-accent transition-colors"
-              value={template}
-              onChange={e => setTemplate(e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="off"
+        <div className="grid lg:grid-cols-[1fr_240px] gap-4">
+          <div className="grid gap-4">
+            <TextField label="Template" hint="Example: {{artist}}/{{album}}/{{track}} - {{title}}">
+              <input
+                className="w-full bg-well border border-ui-border rounded-[8px] px-3 py-2.5 text-[14px] text-white font-mono outline-none focus:border-accent"
+                value={template}
+                onChange={e => setTemplate(e.target.value)}
+                placeholder="{{artist}}/{{album}}/{{title}}"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </TextField>
+
+            <div className="flex flex-wrap gap-2">
+              {tokenHelp.map(token => (
+                <button
+                  key={token}
+                  type="button"
+                  onClick={() => setTemplate(prev => `${prev}${prev && !prev.endsWith('/') ? '/' : ''}${token}`)}
+                  className="rounded-full border border-ui-border px-3 py-1.5 text-[12px] text-muted hover:text-white hover:border-accent transition-colors"
+                >
+                  {token}
+                </button>
+              ))}
+            </div>
+
+            <ToggleRow
+              checked={enrich}
+              onChange={setEnrich}
+              name="Enrich track metadata"
+              desc="Fetch additional metadata before applying path template tokens."
             />
 
-            <div className="flex items-baseline gap-2 px-0.5 overflow-x-auto">
-              <span className="text-white shrink-0" style={{ opacity: 0.25 }}>→</span>
-              <div className="text-[13px] font-medium whitespace-nowrap">
-                <PathLine template={template} />
-              </div>
+            <div className="grid sm:grid-cols-[1fr_auto] gap-2 items-end">
+              <TextField label="Save current template as preset">
+                <input
+                  className="w-full bg-well border border-ui-border rounded-[8px] px-3 py-2 text-[13px] text-white outline-none focus:border-accent"
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  placeholder="My folder layout"
+                />
+              </TextField>
+              <Button onClick={savePreset} disabled={!name.trim() || !template.trim()} className="py-2">Save preset</Button>
             </div>
+          </div>
 
-            <div className="flex flex-wrap gap-2 pt-1">
-              {TEMPLATE_VARS.map(({ name: varName, example, enriched }) => {
-                const locked = enriched && !enrichEnabled
-                return (
-                  <button
-                    key={varName}
-                    onClick={() => !locked && insertVariable(varName)}
-                    title={locked ? 'Enable rich metadata in settings to use this variable' : undefined}
-                    className={`flex items-baseline gap-1.5 bg-surface border rounded-[6px] px-2.5 py-1.5 text-[12px] transition-colors
-                      ${locked
-                        ? 'border-ui-border text-muted opacity-40 cursor-not-allowed'
-                        : 'border-ui-border text-white cursor-pointer hover:border-accent hover:text-accent'}`}
-                  >
-                    {varName}
-                    <span className="text-[10px] text-muted">{example}</span>
-                  </button>
-                )
-              })}
-            </div>
-
-            <p className="text-[11px] text-muted mb-3 leading-relaxed">
-              Click a variable to insert it at the cursor. Dimmed variables require <span className="text-white">Auto-tag</span> to be enabled in settings. Illegal path characters are stripped automatically.
-            </p>
+          <div className="bg-well border border-ui-border rounded-[8px] p-2 max-h-[360px] overflow-y-auto">
+            {templates.length === 0 ? (
+              <p className="text-[12px] text-muted p-2">No presets yet.</p>
+            ) : templates.map(item => (
+              <button
+                key={item.name}
+                type="button"
+                onClick={() => setTemplate(item.template)}
+                className={`w-full text-left rounded-[7px] p-2 mb-1 border transition-colors ${selected?.name === item.name ? 'border-accent bg-accent/10' : 'border-transparent hover:border-ui-border hover:bg-white/5'}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[12px] text-white font-medium">{item.name}</span>
+                  {!item.built_in && <span onClick={e => { e.stopPropagation(); removePreset(item) }} className="text-[11px] text-danger hover:text-white">Delete</span>}
+                </div>
+                <div className="text-[11px] text-muted font-mono break-all mt-1">{item.template}</div>
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-5 pb-5">
-          <button
-            onClick={onClose}
-            className="bg-transparent border-none text-muted text-[13px] cursor-pointer p-0 hover:text-white transition-colors"
-          >
-            Cancel
-          </button>
-          <Button onClick={handleSave} style={{ background: 'transparent' }}>
-            Save preset
-          </Button>
+        <div className="flex justify-end gap-2 mt-5">
+          <Button onClick={onClose} className="bg-transparent">Cancel</Button>
+          <Button onClick={applyTemplate}>Apply template</Button>
         </div>
-      </motion.div>
-    </motion.div>
+      </div>
+    </div>
   )
 }
