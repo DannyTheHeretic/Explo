@@ -216,7 +216,7 @@ func main() {
 		previousPlaylistName := cfg.ClientCfg.PlaylistName
 		tracks, playlistName, err = loadCustomTracks(cfg.ServerCfg.WebDataDir, cfg.Flags.Playlist)
 		if err == nil {
-			cfg.ClientCfg.PlaylistName = config.PlaylistNameWithUser(playlistName, cfg.DiscoveryCfg.Listenbrainz.User)
+			cfg.ClientCfg.PlaylistName = playlistName
 			if cfg.DownloadCfg.UseSubDir {
 				cfg.DownloadCfg.DownloadDir = replacePlaylistDownloadSubdir(cfg.DownloadCfg.DownloadDir, previousPlaylistName, cfg.ClientCfg.PlaylistName)
 			}

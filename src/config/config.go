@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/ilyakaznacheev/cleanenv"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 )
 
 var Version = "dev"
@@ -284,19 +282,17 @@ func (cfg *Config) GenPlaylistName() { // Generate playlist name and description
 func getPlaylistName(playlistType, format string, persist bool, lbUser string) string {
 	now := time.Now()
 
-	toTitle := cases.Title(language.Und)
-	base := PlaylistNameWithUser(toTitle.String(playlistType), lbUser)
 
 	// Non-persistent playlists always use base name
 	if !persist {
-		return base
+		return playlistType
 	}
 
 	// Explicit date-based naming
 	if format == "date" {
 		return fmt.Sprintf(
 			"%s-%s",
-			base,
+			playlistType,
 			now.Format("2006-01-02"),
 		)
 	}
@@ -305,7 +301,7 @@ func getPlaylistName(playlistType, format string, persist bool, lbUser string) s
 	if playlistType == "daily-jams" {
 		return fmt.Sprintf(
 			"%s-%d-Day%d",
-			base,
+			playlistType,
 			now.Year(),
 			now.YearDay(),
 		)
@@ -314,7 +310,7 @@ func getPlaylistName(playlistType, format string, persist bool, lbUser string) s
 	year, week := now.ISOWeek()
 	return fmt.Sprintf(
 		"%s-%d-Week%d",
-		base,
+		playlistType,
 		year,
 		week,
 	)
@@ -327,12 +323,4 @@ var playlistOwnerUnsafeChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 // on the same media server without colliding.
 func ListenBrainzUserSlug(lbUser string) string {
 	return strings.Trim(playlistOwnerUnsafeChars.ReplaceAllString(strings.TrimSpace(lbUser), "-"), "-._")
-}
-
-func PlaylistNameWithUser(playlistName, lbUser string) string {
-	owner := ListenBrainzUserSlug(lbUser)
-	if owner == "" {
-		return playlistName
-	}
-	return owner + "-" + playlistName
 }

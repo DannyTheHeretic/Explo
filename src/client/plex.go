@@ -212,6 +212,9 @@ func (c *Plex) findSharedUser(username string) (*PlexSharedUser, error) {
 }
 
 func (c *Plex) SwitchUser(username string) (*Plex, error) {
+	if c.Cfg.Creds.User == username {
+		return c, nil
+	}
 	user, err := c.findSharedUser(username)
 	if err != nil {
 		return nil, err
